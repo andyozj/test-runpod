@@ -184,6 +184,8 @@ It is not built because of a structural obstacle rather than a lack of appetite.
 
 ## Weight path
 
-The worker resolves weights from `WEIGHTS_PATH` in settings. It does not know or care which deployment variant it is running under — baked into the image, mounted from a network volume, or pre-staged by RunPod's cached-models feature at `/runpod-volume/huggingface-cache/hub/models--black-forest-labs--FLUX.1-dev/snapshots/{revision}/` ([06](06-build-deploy.md)). One code path, three deployments.
+`weights.resolve()` tries `WEIGHTS_PATH` first, then RunPod's model cache at `/runpod-volume/huggingface-cache/hub/models--{org}--{name}/snapshots/{revision}/` ([06](06-build-deploy.md)). The worker does not know which deployment variant it is running under — one code path, and a deployment selects a mechanism by configuration alone.
+
+An explicit path always wins, because a deployment that sets one has made a decision the cache must not override. That branch serves the baked image, and would serve a mounted network volume too, though none is deployed.
 
 Startup fails fast if `WEIGHTS_PATH` does not exist. Without that check a misconfigured volume mount falls through to downloading 33GB from HuggingFace on every cold start, which presents as "slow" rather than "broken" and can survive a whole benchmark run undetected.

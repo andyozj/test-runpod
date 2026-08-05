@@ -29,8 +29,8 @@ Update on every deploy. **A rollback that begins with "work out which tag was go
 export IMAGE=ghcr.io/OWNER/flux-worker
 export TAG=0.1.0-$(git rev-parse --short HEAD)
 
-make build-volume IMAGE=$IMAGE TAG=$TAG      # ~2.9GB, no weights
-docker push $IMAGE:$TAG-volume
+make build-slim IMAGE=$IMAGE TAG=$TAG      # ~2.9GB, no weights
+docker push $IMAGE:$TAG-slim
 ```
 
 `--platform linux/amd64` is set in the Makefile. Building on an arm64 Mac without it produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
@@ -38,13 +38,13 @@ docker push $IMAGE:$TAG-volume
 ### Smoke test before pushing
 
 ```bash
-docker run --rm --platform linux/amd64 $IMAGE:$TAG-volume \
+docker run --rm --platform linux/amd64 $IMAGE:$TAG-slim \
   python -c "import torch, diffusers, worker.handler; print('imports ok')"
 ```
 
 Without a GPU that is as far as it goes locally, and it is worth doing: it catches a broken install, the wrong interpreter, and an architecture mismatch — three failures that would otherwise appear as a dead worker on a paid endpoint.
 
-The image also ships `test_input.json`, so on a GPU host `docker run --rm --gpus all $IMAGE:$TAG-volume` runs one real job end to end through the same `handler` the endpoint calls. First thing to try if the endpoint misbehaves.
+The image also ships `test_input.json`, so on a GPU host `docker run --rm --gpus all $IMAGE:$TAG-slim` runs one real job end to end through the same `handler` the endpoint calls. First thing to try if the endpoint misbehaves.
 
 ## Deploy
 
@@ -54,9 +54,9 @@ Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's
 export RUNPOD_API_KEY=...
 
 python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml \
-    --tag $TAG-volume --dry-run      # prints both payloads, calls nothing
+    --tag $TAG-slim --dry-run      # prints both payloads, calls nothing
 python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml \
-    --tag $TAG-volume
+    --tag $TAG-slim
 ```
 
 Then, on that endpoint in the console:
@@ -102,7 +102,7 @@ Ordered by how often each is actually the cause.
 
 | Symptom | Likely cause | Check |
 |---|---|---|
-| Worker starts and dies immediately | Image built for arm64 | `docker inspect $IMAGE:$TAG-volume \| grep Architecture` — must be `amd64` |
+| Worker starts and dies immediately | Image built for arm64 | `docker inspect $IMAGE:$TAG-slim \| grep Architecture` — must be `amd64` |
 | Every job fails at startup | Weights not found, or cache holds a different revision | Worker logs — `weights_resolved` on success; otherwise a message naming all three mechanisms |
 | Refuses to start, revision mismatch | Cache staged a snapshot other than the pinned one | Reconcile `contracts/model-revision.txt` with what the message reports |
 | Jobs stuck `IN_QUEUE`, no workers | No GPU matching `gpuTypeIds` **and** `allowedCudaVersions` | `GET /v2/{id}/health` → `workers.running` stays 0. Widen the GPU list, or the CUDA filter |
@@ -130,7 +130,6 @@ That last row is the one that wastes time if you do not know it in advance.
 ## Teardown
 
 1. Delete the endpoints and their templates.
-2. Delete any network volume — it bills per GB per month for as long as it exists.
 3. Revoke the `HF_TOKEN` if it was created for this exercise.
 
 Cached models need no teardown: nothing was provisioned and nothing bills for storage.

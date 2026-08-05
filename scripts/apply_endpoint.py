@@ -15,9 +15,9 @@ create if absent, patch if present.
 Usage:
     export RUNPOD_API_KEY=...
     python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml \\
-        --tag 0.1.0-a3f21c8-volume --dry-run
+        --tag 0.1.0-a3f21c8-slim --dry-run
     python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml \\
-        --tag 0.1.0-a3f21c8-volume
+        --tag 0.1.0-a3f21c8-slim
 """
 
 from __future__ import annotations

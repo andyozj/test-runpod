@@ -148,32 +148,31 @@ The deployed image is ~2.9GB — no weights, and no CUDA base image, since the t
 export HF_TOKEN=...   # requires accepting the FLUX.1-dev licence on HuggingFace
 export IMAGE=ghcr.io/OWNER/flux-worker TAG=0.1.0-$(git rev-parse --short HEAD)
 
-make build-volume IMAGE=$IMAGE TAG=$TAG   # ~2.9GB, deployed
-docker push $IMAGE:$TAG-volume
+make build-slim IMAGE=$IMAGE TAG=$TAG   # ~2.9GB, deployed
+docker push $IMAGE:$TAG-slim
 ```
 
 `--platform linux/amd64` is set in the Makefile. Without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
 
 ### Weight delivery
 
-The brief says *"Build a Docker image that includes your serverless handler and the model."* Both images are built from one `Dockerfile` via the `BAKE_WEIGHTS` argument, and the baked one is published — but **the deployed endpoint mounts a network volume.**
+The brief says *"Build a Docker image that includes your serverless handler and the model."* Both images build from one `Dockerfile` via `BAKE_WEIGHTS`, and the baked one is published — but **the deployed endpoint uses RunPod's cached models**, which pre-stage the repository on host machines before a worker starts.
 
-That is a deliberate deviation, stated rather than hidden — and it exercises the platform rather than treating RunPod as a container host. The costs are named rather than waved away:
+| | Baked (~45GB) | **Cached (~2.9GB)** |
+|---|---|---|
+| Fresh-worker scale-up | Pull 45GB | Pull 2.9GB; host already holds the model |
+| Build and push | 30-60 min, and may exceed registry layer caps | Minutes |
+| Storage cost | Registry only | **None** |
+| Weight transfer | Billed at build | **Unbilled, pre-staged** |
+| Maturity | Stable | **Beta** |
 
-| | Baked (~45GB) | Volume (~10GB) | **Cached (~10GB)** |
-|---|---|---|---|
-| Fresh-worker scale-up | Pull 45GB | Pull 10GB + mount | Pull 10GB; host already holds the model |
-| Region | Any with capacity | **Pinned to the volume's datacenter** | **Any with capacity** |
-| Build and push | 30-60 min | Minutes | Minutes (same image) |
-| Storage cost | Registry only | Per GB, per month | **None** |
-| Weight transfer | Billed at build | Billed at population | **Unbilled** |
-| Maturity | Stable | Stable | **Beta** |
+A deliberate deviation, stated rather than hidden. Staging pulls the whole repo, so the ~24GB of duplicate single-file weights come along — unbilled, and not our disk.
 
-Cached models is deployed. A volume's cost is its datacenter pin, which narrows the GPU pool exactly when scaling up under load — the moment the volume was meant to help — and cached models remove it. Staging does pull the whole repo, so the ~24GB duplicate comes along, but neither the transfer nor the storage is billed.
+**A network volume was tried and dropped.** Its cost is a datacenter pin that narrows the GPU pool exactly when scaling up under load — the moment it was meant to help — plus a per-GB bill and a population step. It is not kept as a fallback, because a volume is only a fallback if it is *already populated*, and populating one costs everything removing it avoided. The fallback is the baked image, already a build target.
 
-The volume endpoint is retained as a fallback and needs no rebuild: **one image serves all three.** `weights.resolve()` tries the configured path, then the model cache, and refuses to start if the cache holds a revision other than the pinned one — RunPod's own example picks an arbitrary snapshot, which would misattribute every image.
+`weights.resolve()` tries the configured path, then the model cache — so a deployment picks a mechanism by configuration alone, and refuses to start if the cache holds a revision other than the pinned one. RunPod's own example picks an arbitrary snapshot, which would misattribute every image.
 
-All three are benchmarked; methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
+All variants are benchmarked; methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
 
 Two details that will otherwise cost you an hour each:
 

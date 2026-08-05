@@ -42,9 +42,9 @@ allowed_cuda_versions:
 container_disk_gb: 20
 concurrency_modifier: 1
 
-# DIFFERENCE from volume.yaml: no volume, so no datacenter pin. This is the
-# whole point — the GPU pool is not narrowed, and it is not narrowed precisely
-# when scaling up under load.
+# No volume, so no datacenter pin — the GPU pool is not narrowed, and it is
+# not narrowed precisely when scaling up under load. This is the whole reason
+# cached models replaced the network volume.
 network_volume_id: null
 datacenters: null
 

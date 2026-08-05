@@ -44,7 +44,7 @@ What is actually handed over:
 |---|---|
 | Model | `black-forest-labs/FLUX.1-dev`, bf16, unquantized |
 | Inference | `diffusers.FluxPipeline`. No `torch.compile`, no ComfyUI |
-| Weights | **Cached models is the deployed variant.** Volume and baked images are also built and benchmarked; the baked one because the brief asks for an image containing the model |
+| Weights | **Cached models.** RunPod pre-stages the repo on hosts. The baked image is also built, since the brief asks for an image containing the model |
 | Build host | RunPod GPU Pod |
 | Registry | GHCR |
 | Tiers | Serverless worker (graded) + FastAPI gateway (beyond the brief) |
@@ -54,33 +54,33 @@ What is actually handed over:
 | Documented only | Webhook-out, SSE, WebSocket, MCP, rate limiting, metrics export |
 | Out of scope | Fine-tuning, LoRA, batch inference, multi-region |
 
-## Why two weight-delivery variants
+## Why cached models, not weights in the image
 
 The brief is explicit: *"Build a Docker image that includes your serverless handler and the model."*
 
-The deployed endpoint nevertheless uses **cached models**: RunPod pre-stages the HuggingFace repository on host machines before a worker starts, preferring hosts that already hold it. All three are built from one Dockerfile via `BAKE_WEIGHTS`, and the baked image is published so the artefact the brief names demonstrably exists — but the cached endpoint is what serves traffic.
+The deployed endpoint nevertheless uses **cached models**: RunPod pre-stages the HuggingFace repository on host machines before a worker starts, preferring hosts that already hold it. Both images build from one Dockerfile via `BAKE_WEIGHTS`, and the baked one is published so the artefact the brief names demonstrably exists — but the cached endpoint serves traffic.
 
-Cached models dominate the volume on every axis that matters here. A volume's cost is the datacenter pin, which narrows the GPU pool exactly when scaling up under load — the moment the volume was supposed to help. Cached models remove that pin, remove the per-GB storage bill, and make the weight transfer unbilled. The volume endpoint remains as the fallback and the benchmark comparison, and needs no rebuild: the same ~10GB image serves both.
+| | Baked (~45GB) | **Cached (~2.9GB)** |
+|---|---|---|
+| Fresh-worker scale-up | Pull 45GB | Pull 2.9GB; host already holds the model |
+| Region | Any with capacity | Any with capacity |
+| Build and push | 30-60 min, and may exceed registry layer caps | Minutes |
+| Storage cost | Registry only | **None** |
+| Weight transfer | Billed at build | **Unbilled, pre-staged** |
+| Maturity | Stable | **Beta** |
 
-Two caveats, stated rather than discovered. It is **beta**. And staging pulls the *whole* repository, so the ~24GB of duplicate single-file weights come along — ~56GB rather than ~33GB. That costs us nothing directly, since neither the transfer nor the storage is billed, but it is the reason the effect on scale-up must be measured rather than assumed.
+Stating the deviation rather than hiding it. Staging pulls the *whole* repository, so the ~24GB of duplicate single-file weights come along — unbilled and not our disk, but the reason scale-up is measured rather than assumed.
 
-Stating the tension rather than hiding it: this is a deviation from the literal instruction, made deliberately, and the README says so in as many words. Network volumes are also one of RunPod's distinguishing features, so the deployment exercises the platform rather than treating it as a container host.
+### The network volume was considered and dropped
 
-| | Baked | Network volume | **Cached models** |
-|---|---|---|---|
-| Image size | ~45GB | ~10GB | ~10GB (same image) |
-| Fresh-worker scale-up | Pull 45GB | Pull 10GB, mount weights | Pull 10GB; host already holds the model |
-| Region | Unconstrained | **Pinned to the volume's datacenter** | **Unconstrained** |
-| Build/push iteration | Slow | Fast | Fast |
-| Storage cost | None beyond registry | Per-GB, per-month | **None** |
-| Weights transfer | Billed once at build | Billed once at population | **Unbilled, pre-staged** |
-| Maturity | Stable | Stable | **Beta** |
+An earlier revision deployed from a network volume. It was removed once cached models worked, because a volume's cost is a datacenter pin that narrows the GPU pool exactly when scaling up under load — the moment it was supposed to help — plus a per-GB monthly bill and a population step.
 
-The region constraint is the tradeoff that usually goes unwritten: a volume pins the endpoint to one datacenter, which narrows the GPU pool available — and that bites precisely when scaling up under load, which is the moment the volume was supposed to help.
+It is not retained as a fallback, because it would not be one. A volume is only a fallback if it is *already populated*, and populating it costs a Pod, a 33GB download, the storage bill and the pin — everything removing it avoided. The fallback is the baked image, which is already a build target.
 
-The hypothesis worth testing is that cached models win on scale-up and on operational simplicity, baked wins on predictability, and the volume wins on nothing once cached models work — which is exactly the kind of claim that deserves measurement rather than assertion. [09](09-benchmarks.md) measures all three.
+Worth knowing: cached models mount at `/runpod-volume/huggingface-cache/hub`, the same path a network volume uses. Attaching both would put two mechanisms on one mount point.
 
-The worker code is identical across all three. `weights.resolve()` tries the configured path, then the model cache, so a deployment selects a mechanism by configuration alone — there is no code fork and no third image.
+The worker code is identical either way. `weights.resolve()` tries the configured path, then the model cache, so a deployment selects a mechanism by configuration alone — no code fork, and a volume would still work if anyone wanted one.
+
 
 ## Two design rules that everything else follows from
 
@@ -106,8 +106,8 @@ Phase 2b is the graded deliverable and is **blocked on RunPod credits**, which a
 | 1 | Worker: schemas, pipeline protocol, inference, handler, guardrail, tests | Suite green, no GPU | No |
 | 1b | **`README.md` and `client/generate.py`, written against the contract** | **A reviewer could run it the moment 2b lands** | No |
 | 2a | `Dockerfile`, `fetch_weights.py`, runbook, benchmark harness | Weight filter verified via `list_repo_files`; harness runs against a fake | No |
-| 2b | **Populate the volume, build and push both images, deploy the volume endpoint, smoke test** | **An image generated from a prompt** | **Credits** |
-| 2c | Benchmark: latency sweeps, cold start, cost. Baked endpoint and the variant comparison if time allows | `BENCHMARKS.md` populated | **Credits** |
+| 2b | **Build and push, deploy the cached endpoint, smoke test** | **An image generated from a prompt** | **Credits** |
+| 2c | Benchmark: latency sweeps, cold start, cost. Baked comparison if time allows | `BENCHMARKS.md` populated | **Credits** |
 | 3 | Gateway core, adapters, migrations, auth, tests | Coverage gate | No |
 | 4 | Async facade, reconciler, health, compose | E2E against a fake `RunPodClient` | No |
 | 5 | Remaining docs, diagrams | Complete except measured numbers | Partly |
@@ -127,13 +127,12 @@ Until 2b runs, `BENCHMARKS.md` does not exist and no figure anywhere is stated a
 | Gateway consumes time the graded deliverable needs | 2a completes before Phase 3 starts |
 | ~45GB image push is slow and failure-prone | Build and push from the Pod; GHCR avoids Docker Hub pull limits |
 | L40S unavailable in region | GPU fallback list; benchmark A100 80GB regardless |
-| **Both variants are region-constrained**, narrowing the GPU pool | The volume pins its endpoint; the S3 image storage exists in only five datacenters, so the baked variant is constrained too if storage is enabled. With storage off by default the baked variant is unconstrained — which is another reason it is the default |
-| Volume variant doubles the 2b deploy work | Worker code is identical; only the weight path differs. If time runs short, the baked variant alone still satisfies the brief |
+| Cached models is beta | The baked image is the fallback and is already a build target; switching is a tag and a config change |
 | `diffusers` API drift | Pin exact versions; `uv.lock` committed |
 
 ## Corrections to earlier design notes
 
-1. **Weights baked into the image as the primary variant.** The brief requires it. Superseded in part: rather than only documenting the network-volume alternative, both are built and benchmarked — see *Why two weight-delivery variants* above.
+1. **Weights are not in the deployed image.** Superseded twice: first by a network volume, then by cached models, which removed the volume's datacenter pin and storage bill. The baked image is still built and published because the brief names it — see *Why cached models* above.
 2. **Cost figures were wrong by ~12×.** L40S serverless is $1.75/hr, not $0.54/hr — $0.99/hr is the *Pod* rate. 1024²/28 steps is ~20-25s, not 4-6s. Every figure is now measured or labelled an estimate.
 3. **Module-level pipeline init replaced by a lazy accessor.** The original made `handler.py` unimportable without a GPU, therefore untestable.
 4. **CI does not build the image.** Standard GitHub runners have ~14GB free disk.

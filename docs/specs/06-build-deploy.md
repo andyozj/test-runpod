@@ -37,23 +37,12 @@ contracts/model-revision.txt      # e.g. 0ef5fff789c832c5c7f4e127f94c8b54bbcced4
 
 This is what makes `model_version` in the worker's response ([01](01-worker.md)) a fact rather than a label.
 
-### The volume variant must prove what it holds
+### The cache must prove what it holds
 
-A baked image knows its weights — it downloaded them during its own build. A mounted volume could contain anything: populated once, weeks earlier, possibly from a different revision.
+A baked image knows its weights — it downloaded them during its own build. A cache could hold anything: staged weeks earlier, possibly from a different revision.
 
-If the two variants run different weights, the baked-versus-volume comparison in [09](09-benchmarks.md) measures two variables at once and concludes nothing.
+`weights.resolve()` starts only if the pinned revision from `contracts/model-revision.txt` is present, and the error names what it found instead. RunPod's own example sorts available snapshots and takes the first, which would run a model the response then reports as the pinned revision — misattributing every image.
 
-So population writes a manifest to the volume root:
-
-```json
-{"repo": "black-forest-labs/FLUX.1-dev",
- "revision": "0ef5fff...",
- "files": 23,
- "bytes": 33071284736,
- "populated_at": "2026-08-05T12:04:00Z"}
-```
-
-Startup reads it and fails fast on a mismatch with `contracts/model-revision.txt`. A wrong-revision volume is then a refusal to start rather than a benchmark run that quietly compares two different models.
 
 ## Image tags
 
@@ -61,7 +50,7 @@ Startup reads it and fails fast on a mismatch with `contracts/model-revision.txt
 ghcr.io/<owner>/flux-worker:{version}-{short-sha}-{variant}
 
 ghcr.io/<owner>/flux-worker:0.1.0-a3f21c8-baked
-ghcr.io/<owner>/flux-worker:0.1.0-a3f21c8-volume
+ghcr.io/<owner>/flux-worker:0.1.0-a3f21c8-slim
 ```
 
 Version for humans, short SHA so two builds of one version are distinguishable, variant because both must coexist in the registry and be deployed to separate endpoints.
@@ -87,19 +76,17 @@ Base: `nvidia/cuda:12.4.1-runtime-ubuntu22.04`. `runtime` not `devel` — the de
 
 Expected final size ~45GB.
 
-## Three weight-delivery variants
+## Two weight-delivery variants
 
-All three are built from one image definition. The worker code is identical; `weights.resolve()` tries the configured path, then the model cache, so a deployment picks a mechanism by configuration alone.
+Both are built from one image definition. The worker code is identical; `weights.resolve()` tries the configured path, then the model cache, so a deployment picks a mechanism by configuration alone.
 
 **Baked.** `fetch_weights.py` runs at build time, weights land in the image, `WEIGHTS_PATH` points at the image path. ~45GB, no region constraint. Built and published because the brief names it; not the deployed variant.
 
-**Network volume.** The weights layer is skipped, producing a ~10GB image. A RunPod network volume is populated once from a Pod and mounted at `/runpod-volume`; `WEIGHTS_PATH` points there. Retained as the fallback and the benchmark comparison.
-
-**Cached models (deployed).** The same ~10GB image, with `WEIGHTS_PATH` deliberately unset. RunPod pre-stages the repository on host machines and mounts the HuggingFace cache; the worker resolves `models--{org}--{name}/snapshots/{revision}` beneath `MODEL_CACHE_ROOT`. Enabled by the endpoint's **Model** field plus an HF token, since FLUX.1-dev is gated. No code change, no third image, no datacenter pin, no storage bill.
+**Cached models (deployed).** A ~2.9GB image with no weights layer, with `WEIGHTS_PATH` deliberately unset. RunPod pre-stages the repository on host machines and mounts the HuggingFace cache; the worker resolves `models--{org}--{name}/snapshots/{revision}` beneath `MODEL_CACHE_ROOT`. Enabled by the endpoint's **Model** field plus an HF token, since FLUX.1-dev is gated. No code change, no third image, no datacenter pin, no storage bill.
 
 **The resolver refuses a revision mismatch.** RunPod's own example sorts the available snapshots and takes the first, which would run a model the response then reports as the pinned revision — misattributing every image and silently invalidating any comparison between endpoints. Ours starts only if the pinned revision is present, and names what it found instead.
 
-Beta, so the volume endpoint stays deployable as a fallback from the same image.
+Beta. The fallback is the baked image, already a build target — a tag and a config change, no new infrastructure.
 
 ```dockerfile
 ARG BAKE_WEIGHTS=true
@@ -171,7 +158,6 @@ So the endpoints are **not** created by clicking through the console. Both are d
 
 ```
 deploy/endpoints/baked.yaml
-deploy/endpoints/volume.yaml
 scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml --tag 0.1.0-a3f21c8-baked
 ```
 

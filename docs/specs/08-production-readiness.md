@@ -39,7 +39,7 @@ Ranked by what would hurt first in a real deployment.
 | 2 | **No budget cap or spend alerting** | Cost overrun is discovered on the invoice | Low — RunPod API polling plus a threshold |
 | 3 | **No metrics export** | `endpoint_health` gives a log-based time series, but there is no scrape endpoint, no dashboard, no alerting, no SLOs | Low — `prometheus-client` and a `/metrics` route |
 | 4 | **The endpoint is a second door with one shared key** | The serverless endpoint is callable with the RunPod API key, which is account-scoped, identical for every holder, and can also create and delete resources. Anyone given it bypasses the gateway — no per-caller auth, no idempotency, no attribution — and there is no way to issue a narrower credential | Not closable from our side. Mitigated by key hygiene and by duplicating the guardrail into the worker |
-| 5 | **No retention or deletion for images or prompts** | With storage enabled, images accumulate on the network volume, billed per GB per month; prompts accumulate in `jobs.request` regardless. Both are retained deliberately for audit, but with no expiry and no deletion route a takedown or erasure request cannot be honoured | Medium — lifecycle job plus a deletion route |
+| 5 | **No retention or deletion for prompts** | Prompts accumulate in `jobs.request`. Both are retained deliberately for audit, but with no expiry and no deletion route a takedown or erasure request cannot be honoured | Medium — lifecycle job plus a deletion route |
 | 6 | **No distributed tracing** | The correlation ID is a hand-rolled substitute. No spans, no latency breakdown between queue wait and inference | Medium — OpenTelemetry across both tiers |
 | 7 | **Circuit breaker state is per-process** | Correct for one instance, wrong for a fleet — each replica learns the outage separately | Medium — shared state in Redis |
 | 8 | **No audit trail** | Abuse investigation and takedown rest on raw logs. `flag` verdicts are recorded but nothing consumes them | Medium — append-only audit table and a review queue |
@@ -50,7 +50,6 @@ Ranked by what would hurt first in a real deployment.
 | 13 | **No image provenance** | Output is not attributable as machine-generated | Medium — C2PA or invisible watermark |
 | 14 | **No cancellation** | A queued job cannot be stopped, and it will still be billed. RunPod supports `POST /cancel`; we expose no route | Low — a route and one adapter call |
 | 15 | **Worker image build is outside CI** | ~45GB against ~14GB of runner disk. Build and push happen on a Pod by runbook; only deploy is automated | Medium — a self-hosted runner on a Pod |
-| 16 | **Datacenter choice is constrained** | The S3 API exists in five datacenters, and a weights volume must sit with its endpoint. Co-locating weights and image storage on one volume makes this a single constraint rather than two, but it still narrows the GPU pool | Low if co-located; otherwise accept |
 | 17 | **Single region** | A RunPod region outage is a total outage | High |
 | 18 | **No DB backup, restore drill, or SLOs** | Recovery is untested | High — process, not code |
 

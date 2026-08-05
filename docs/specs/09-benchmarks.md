@@ -78,7 +78,7 @@ cost = execution_seconds × (hourly_rate / 3600)
 
 Reported per GPU per configuration, plus the honest version that includes idle-timeout billing between requests at a stated request rate. Execution-only cost understates real spend for bursty traffic, and bursty is the normal case.
 
-Storage is added as a separate line: the network volume holding weights, plus generated images accumulating at the published per-GB rate. Small, but it is the only cost that grows without anyone submitting anything — and with no retention policy ([08](08-production-readiness.md) gap #5) it grows indefinitely.
+Storage adds nothing for the deployed variant: cached models are staged by the platform and bill nothing, and no images are stored. The baked variant's only storage cost is the registry. This is a change worth stating — an earlier design carried a per-GB monthly bill that grew whether or not anyone submitted a request.
 
 Cross-check the derived figure against RunPod's reported spend for the benchmark run. A model that disagrees with the invoice is wrong.
 
@@ -112,7 +112,7 @@ Response payload size **matters again**, because the worker returns base64 by de
 
 Measured at 512², 1024² and 1536², PNG and JPEG. If 1536² PNG exceeds the limit, JPEG becomes the default at high resolutions — a decision this measurement exists to make. Object storage would sidestep the question entirely and is not built ([08](08-production-readiness.md) gap #10), so the measurement has to settle it.
 
-### 7. Weight delivery: baked versus network volume versus cached models
+### 7. Weight delivery: cached models versus baked
 
 Three endpoints, identical worker code, differing only in where weights come from. The headline platform comparison.
 
