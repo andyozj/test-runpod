@@ -1,5 +1,8 @@
-# Baked-weights endpoint. The primary deliverable: the image contains the
-# handler and the model, per the brief.
+# Baked-weights endpoint. Documented fallback, not deployed: the image
+# contains the handler and the model, which is the artefact the brief names.
+#
+# Also the fallback if cached models (beta) misbehaves — a different tag and
+# this file, with no infrastructure to provision.
 #
 # Applied with:
 #   python scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml \
@@ -44,11 +47,6 @@ container_disk_gb: 20                # keeps VRAM resident between jobs
 
 # GPU-bound. A second concurrent job causes VRAM contention, not throughput.
 concurrency_modifier: 1
-
-# No network volume: weights are in the image, so the endpoint is free to run
-# in any datacenter with capacity.
-network_volume_id: null
-datacenters: null
 
 env:
   WEIGHTS_PATH: /opt/weights

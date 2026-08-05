@@ -75,7 +75,9 @@ Stating the deviation rather than hiding it. Staging pulls the *whole* repositor
 
 An earlier revision deployed from a network volume. It was removed once cached models worked, because a volume's cost is a datacenter pin that narrows the GPU pool exactly when scaling up under load — the moment it was supposed to help — plus a per-GB monthly bill and a population step.
 
-It is not retained as a fallback, because it would not be one. A volume is only a fallback if it is *already populated*, and populating it costs a Pod, a 33GB download, the storage bill and the pin — everything removing it avoided. The fallback is the baked image, which is already a build target.
+**A volume remains a valid option and no code carries it.** `weights.resolve()` already honours an explicit `WEIGHTS_PATH`, which is the same branch the baked image uses — so mounting a volume at that path would work without a line of change. What was removed is the config, the population procedure, and the volume plumbing in the deploy script: machinery for a mechanism nothing deploys.
+
+It is not the *fallback*, because it would not be one. A volume is only a fallback if it is already populated, and populating it costs a Pod, a 33GB download, the storage bill and the datacenter pin — everything removing it avoided. The fallback is the baked image, already a build target.
 
 Worth knowing: cached models mount at `/runpod-volume/huggingface-cache/hub`, the same path a network volume uses. Attaching both would put two mechanisms on one mount point.
 

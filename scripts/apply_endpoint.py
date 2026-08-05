@@ -7,7 +7,7 @@ legacy, and it models the problem differently.
 REST splits it in two, and the split is worth knowing before reading the code:
 
     Template  →  image, environment, container disk
-    Endpoint  →  GPUs, scaling, timeouts, volume, CUDA filter, templateId
+    Endpoint  →  GPUs, scaling, timeouts, CUDA filter, templateId
 
 So a deploy is two upserts, not one. Both are idempotent: look up by name,
 create if absent, patch if present.
@@ -142,7 +142,7 @@ def _parse_simple_yaml(text: str) -> dict[str, Any]:
     return root
 
 
-_LIST_KEYS = {"gpu_types", "allowed_cuda_versions", "datacenters"}
+_LIST_KEYS = {"gpu_types", "allowed_cuda_versions"}
 
 
 def _scalar(value: str) -> Any:
@@ -199,6 +199,8 @@ def endpoint_body(
     """Build the endpoint payload: GPUs, scaling, timeouts, filters.
 
     `env` and the image are deliberately absent — they belong to the template.
+    No network volume and no datacenter pin: weights come from RunPod's model
+    cache, so the endpoint is free to run wherever there is capacity.
 
     Args:
         config: The parsed configuration.
@@ -230,10 +232,6 @@ def endpoint_body(
     # rather than at model load.
     if config.get("allowed_cuda_versions"):
         body["allowedCudaVersions"] = list(config["allowed_cuda_versions"])
-    if config.get("network_volume_id"):
-        body["networkVolumeId"] = config["network_volume_id"]
-    if config.get("datacenters"):
-        body["dataCenterIds"] = list(config["datacenters"])
     if endpoint_id:
         body["id"] = endpoint_id
     return body

@@ -2,13 +2,16 @@
 # machines before a worker starts, preferring hosts that already hold it.
 #
 #   python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml \
-#     --tag 0.1.0-<sha>-volume
+#     --tag 0.1.0-<sha>-slim
 #
-# Reuses the ~10GB volume image: no weights baked in, and the worker resolves
-# them from the cache when WEIGHTS_PATH is absent. No code change.
+# Runs the ~2.9GB slim image: no weights baked in, and the worker resolves them
+# from the cache because WEIGHTS_PATH is unset. No code change.
 #
-# BETA. If it misbehaves, the volume endpoint is the fallback and needs no
-# rebuild — the same image serves both.
+# BETA. If it misbehaves the fallback is baked.yaml, which needs no new
+# infrastructure — a different tag and a different config file.
+#
+# No network volume and no datacenter pin: nothing here provisions storage, so
+# the endpoint runs wherever there is capacity.
 
 name: flux-worker-cached
 image_repository: ghcr.io/OWNER/flux-worker
@@ -41,12 +44,6 @@ allowed_cuda_versions:
 # Disk for the image plus working space. The image is ~2.9GB.
 container_disk_gb: 20
 concurrency_modifier: 1
-
-# No volume, so no datacenter pin — the GPU pool is not narrowed, and it is
-# not narrowed precisely when scaling up under load. This is the whole reason
-# cached models replaced the network volume.
-network_volume_id: null
-datacenters: null
 
 # Set in the endpoint's Model field, not here: RunPod stages this repo and
 # needs an HF token because FLUX.1-dev is gated.
