@@ -91,9 +91,9 @@ Expected final size ~45GB.
 
 Both are built. The worker code is identical; only the weight path differs, so this is one image definition with a build argument rather than two codebases.
 
-**Baked (primary).** `fetch_weights.py` runs at build time, weights land in the image, `WEIGHTS_PATH` points at the image path. ~45GB. No region constraint. This is what the brief asks for.
+**Baked.** `fetch_weights.py` runs at build time, weights land in the image, `WEIGHTS_PATH` points at the image path. ~45GB, no region constraint. Built and published because the brief names it; not the deployed variant.
 
-**Network volume.** The weights layer is skipped, producing a ~10GB image. A RunPod network volume is populated once from a Pod and mounted at `/runpod-volume`; `WEIGHTS_PATH` points there.
+**Network volume (deployed).** The weights layer is skipped, producing a ~10GB image. A RunPod network volume is populated once from a Pod and mounted at `/runpod-volume`; `WEIGHTS_PATH` points there. This is what serves traffic.
 
 ```dockerfile
 ARG BAKE_WEIGHTS=true

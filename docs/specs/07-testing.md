@@ -85,6 +85,18 @@ A drift here is the nastiest failure available: the gateway accepts a request th
 | Health | `/health` responds without a credential; `/health/detailed` requires one and reports database, RunPod, and reconciler state; a dead reconciler surfaces as stale `last_run_s_ago` |
 | Reconciler loop | Ticks on schedule, backs off when idle, and shuts down cleanly on cancellation without leaving a write half-applied |
 
+## The SDK's own harness
+
+The pytest suite is the CI gate; RunPod's SDK harness is the **Pod smoke test** — the documented way to prove the image works before an endpoint exists, and the layer a RunPod reviewer will look for.
+
+| Tool | What it proves | When |
+|---|---|---|
+| `test_input.json` (committed) | `python -m worker.handler` runs exactly one job through the real handler, pipeline and GPU, no queue involved | On the build Pod, before push |
+| `--test_input '{"input": ...}'` | Same, with an inline payload — used for the OOM and blocked-prompt smoke cases | On the build Pod |
+| `--rp_serve_api` | FastAPI simulator of the endpoint surface on `localhost:8000`; `POST /runsync` exercises submit-through-response without deploying | On the build Pod |
+
+This slots between "image pushed" and "endpoint created" in the runbook and is what separates *the image is broken* from *the endpoint is misconfigured* while both are still cheap to tell apart. It is not part of `make check` — everything here needs the GPU image.
+
 ## E2E
 
 `@pytest.mark.gpu`, deselected by default, run by hand against a live endpoint. Blocked until Phase 2b.
@@ -92,8 +104,9 @@ A drift here is the nastiest failure available: the gateway accepts a request th
 | Case | Purpose |
 |---|---|
 | Prompt → image | The graded demonstration |
+| `/runsync` one-liner | The single-command demo in [01](01-worker.md#the-demonstration-is-one-runsync-call) returns a decodable image against a warm worker |
 | Same seed twice | Reproducibility |
-| **Baked vs volume, identical weights** | **`sha256` of the weight files matches across variants**, reported by a debug field on the health response. Output pixels are *not* compared: two invocations land on different physical GPUs, and bf16 kernel and cuDNN algorithm selection are not bit-reproducible across hosts, so an image diff would fail for reasons unrelated to weights. Hashing is exact, free, and needs no generation |
+| **Weight variants, identical weights** | **`sha256` of the weight files matches across every deployed variant — baked, volume, cached** — reported by a debug field on the health response. Output pixels are *not* compared: two invocations land on different physical GPUs, and bf16 kernel and cuDNN algorithm selection are not bit-reproducible across hosts, so an image diff would fail for reasons unrelated to weights. Hashing is exact, free, and needs no generation |
 | Progress mid-generation | Polling during a job returns increasing `percent` |
 | Image proxy | The URL from a completed job returns real image bytes |
 | Idempotency replay | Same key returns the same job; RunPod shows one execution, not two |

@@ -36,27 +36,35 @@ Update this table on every deploy. **A rollback procedure that begins with "work
    export IMAGE=ghcr.io/OWNER/flux-worker
    ```
 
-3. **Build the baked variant** (~30-60 min, mostly the 33GB download).
+3. **Build both variants.** The volume image is small and fast; build it first so a deploy is unblocked early.
    ```bash
-   make build-baked IMAGE=$IMAGE TAG=$TAG
+   make build-volume IMAGE=$IMAGE TAG=$TAG    # ~10GB, minutes
+   make build-baked  IMAGE=$IMAGE TAG=$TAG    # ~45GB, 30-60 min, mostly the download
    ```
 
-4. **Smoke test on the Pod before pushing.** Catching a broken image here costs minutes; catching it after a 45GB push costs an hour.
+4. **Smoke test on the Pod before pushing.** Catching a broken image here costs minutes; catching it after a push costs an hour.
    ```bash
+   # volume variant, against the populated volume
+   docker run --rm --gpus all -v /runpod-volume:/runpod-volume \
+     -e WEIGHTS_PATH=/runpod-volume/flux $IMAGE:$TAG-volume \
+     python -c "from worker.pipeline import get_pipeline; get_pipeline(); print('pipeline ok')"
+
+   # baked variant
    docker run --rm --gpus all -e WEIGHTS_PATH=/opt/weights $IMAGE:$TAG-baked \
      python -c "from worker.pipeline import get_pipeline; get_pipeline(); print('pipeline ok')"
    ```
 
-5. **Push.**
+5. **Push.** Volume first — it unblocks the deploy.
    ```bash
+   docker push $IMAGE:$TAG-volume
    docker push $IMAGE:$TAG-baked
    ```
 
 6. **Terminate the Pod.** It bills by the hour while running.
 
-## Populate the network volume (comparison variant only)
+## Populate the network volume (required)
 
-Skip unless running the baked-vs-volume benchmark.
+The deployed endpoint mounts a volume, so this is on the critical path, not an optional extra. Do it **before** deploying.
 
 1. Create a network volume, ~50GB, in a datacenter that also has L40S capacity. It must be one of the five supporting the S3 API if image storage is ever enabled: `EUR-IS-1`, `EU-RO-1`, `EU-CZ-1`, `US-KS-2`, `US-CA-2`.
 2. Attach it to a Pod at `/runpod-volume`.
@@ -66,7 +74,7 @@ Skip unless running the baked-vs-volume benchmark.
    cat /runpod-volume/flux/MANIFEST.json     # confirm revision matches contracts/model-revision.txt
    ```
 4. Build and push the volume variant: `make build-volume IMAGE=$IMAGE TAG=$TAG`
-5. Record the volume id in `deploy/endpoints/volume.yaml`.
+5. Record the volume id and its datacenter in `deploy/endpoints/volume.yaml`.
 
 **The manifest check is not optional.** A volume populated from a different revision makes the benchmark compare two models rather than two delivery mechanisms, and the result would be meaningless without looking wrong.
 
@@ -74,9 +82,16 @@ Skip unless running the baked-vs-volume benchmark.
 
 ```bash
 export RUNPOD_API_KEY=...
-python scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml --tag $TAG-baked --dry-run
+
+# The deployed endpoint. Requires the volume to exist and be populated.
+python scripts/apply_endpoint.py --config deploy/endpoints/volume.yaml --tag $TAG-volume --dry-run
+python scripts/apply_endpoint.py --config deploy/endpoints/volume.yaml --tag $TAG-volume
+
+# The baked endpoint, for the benchmark comparison. Optional.
 python scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml --tag $TAG-baked
 ```
+
+If the endpoint starts but every job fails instantly, the volume is not mounted where `WEIGHTS_PATH` expects. The worker fails fast with the path in the message rather than silently re-downloading 33GB per cold start.
 
 Then **record the tag and the previous tag** in the deploy table above.
 
@@ -96,7 +111,7 @@ Commit the image with its prompt and seed — a result nobody can reproduce is a
 ## Rollback
 
 ```bash
-python scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml --tag <previous-tag>
+python scripts/apply_endpoint.py --config deploy/endpoints/volume.yaml --tag <previous-tag>-volume
 ```
 
 Works only because tags are immutable. With `latest`, the previous image no longer exists to roll back to.

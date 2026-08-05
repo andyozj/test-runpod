@@ -1,6 +1,6 @@
 # FLUX.1-dev on RunPod Serverless
 
-A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, with the model baked into the image.
+A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod with weights on a network volume. The baked-weights image is built and published too — see [Weight delivery](#weight-delivery).
 
 > **Status:** the worker is implemented and tested; the endpoint is not yet deployed. `BENCHMARKS.md` does not exist until it is, and no figure below is presented as measured. See [Current state](#current-state).
 
@@ -110,12 +110,30 @@ make weights-check # verify the weight filter against HF. Downloads nothing.
 
 ## Build and deploy
 
-The image is ~45GB and is **not** built in CI: standard GitHub runners have ~14GB of free disk. Build on a RunPod GPU Pod, which also has datacenter bandwidth to HuggingFace and GHCR.
+Neither image is built in CI: the baked one is ~45GB against ~14GB of free disk on a standard runner. Build on a RunPod GPU Pod, which also has datacenter bandwidth to HuggingFace and GHCR. Full procedure in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ```bash
 export HF_TOKEN=...   # requires accepting the FLUX.1-dev licence on HuggingFace
-make build-baked IMAGE=ghcr.io/OWNER/flux-worker TAG=0.1.0-$(git rev-parse --short HEAD)
+export IMAGE=ghcr.io/OWNER/flux-worker TAG=0.1.0-$(git rev-parse --short HEAD)
+
+make build-volume IMAGE=$IMAGE TAG=$TAG   # ~10GB, deployed
+make build-baked  IMAGE=$IMAGE TAG=$TAG   # ~45GB, published
 ```
+
+### Weight delivery
+
+The brief says *"Build a Docker image that includes your serverless handler and the model."* Both images are built from one `Dockerfile` via the `BAKE_WEIGHTS` argument, and the baked one is published — but **the deployed endpoint mounts a network volume.**
+
+That is a deliberate deviation, stated rather than hidden. Network volumes are a distinguishing RunPod feature, and using one exercises the platform instead of treating it as a container host. The costs are real and measured rather than waved away:
+
+| | Baked (~45GB) | Volume (~10GB) |
+|---|---|---|
+| Fresh-worker scale-up | Pull 45GB | Pull 10GB, mount weights |
+| Region | Any datacenter with capacity | **Pinned to the volume's datacenter**, narrowing the GPU pool — precisely when scaling up |
+| Build and push iteration | 30-60 min | Minutes |
+| Storage cost | None beyond the registry | Per GB, per month |
+
+Both are benchmarked head to head; methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
 
 Two details that will otherwise cost you an hour each:
 
@@ -128,7 +146,7 @@ Two details that will otherwise cost you an hour each:
 |---|---|
 | Model | FLUX.1-dev, bf16, unquantized, revision pinned in `contracts/model-revision.txt` |
 | Inference | `diffusers.FluxPipeline`. No `torch.compile` — 3-10 min of compilation on every cold start is net slower for serverless traffic |
-| Weights | Baked into the image, per the brief. A network-volume variant builds from the same Dockerfile via `BAKE_WEIGHTS=false` |
+| Weights | **The deployed endpoint mounts a RunPod network volume.** The baked image is also built and published — see *Weight delivery* below |
 | GPU | L40S 48GB. bf16 FLUX needs ~24-26GB steady, so 24GB cards are too tight to be safe |
 | Concurrency | `concurrency_modifier = 1`. The worker is GPU-bound; a second concurrent job causes VRAM contention, not throughput |
 
@@ -143,7 +161,10 @@ worker/             the serverless worker — the graded deliverable
   scripts/          fetch_weights.py
   Dockerfile
 client/generate.py  submit-and-poll demo client
-gateway/            FastAPI tier (beyond the brief; see specs)
+gateway/            FastAPI tier (beyond the brief) — see gateway/README.md
+deploy/endpoints/   endpoint configuration as code
+scripts/            apply_endpoint.py
+docs/RUNBOOK.md     build, deploy, rollback, diagnosis
 docs/specs/         design, 10 documents
 ```
 

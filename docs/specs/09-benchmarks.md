@@ -66,7 +66,7 @@ The measurement that turns a guess into a recommendation.
 
 Rates from the RunPod pricing page, 2026-08-05. Re-verify before publishing.
 
-The 4090 run doubles as the VRAM-boundary test — bf16 FLUX needs ~24-26GB, so it is expected to OOM at higher resolutions. **The resolution at which it fails is a result, not a failure of the benchmark**, and it is the empirical basis for the GPU recommendation in [01](01-worker.md).
+The 4090 run doubles as the VRAM-boundary test — bf16 weights are ~34GB resident (23.8GB transformer + ~9.5GB T5-XXL + CLIP + VAE), so a 24GB card is expected to fail **at pipeline load**, before any generation. **Where it fails is a result, not a failure of the benchmark**: it establishes the VRAM floor empirically and is the basis for the GPU recommendation in [01](01-worker.md). If it somehow loads (driver-level paging), the resolution sweep finds the working boundary instead.
 
 ### 4. Cost per image
 
@@ -112,11 +112,13 @@ Response payload size **matters again**, because the worker returns base64 by de
 
 Measured at 512², 1024² and 1536², PNG and JPEG. If 1536² PNG exceeds the limit, JPEG becomes the default at high resolutions — a decision this measurement exists to make. With `STORAGE_ENABLED` the question disappears, but that is not the default and so cannot be the answer.
 
-### 7. Weight delivery: baked versus network volume
+### 7. Weight delivery: baked versus network volume versus cached models
 
-Two endpoints, identical worker code, differing only in where weights come from. The headline platform comparison.
+Three endpoints, identical worker code, differing only in where weights come from. The headline platform comparison.
 
-**Precondition, run first.** Both endpoints must report the same `sha256` over their weight files ([07](07-testing.md)). If they differ, one is running a volume populated from another revision or a stale image, and every row below compares two variables at once. **The comparison is void until this passes.**
+The third endpoint costs almost nothing to add: it reuses the ~10GB volume image with no volume attached — the **Model** field on the endpoint names the HF repo, RunPod pre-stages it on host machines before the worker starts (unbilled), and `WEIGHTS_PATH` points at the cache snapshot path ([01](01-worker.md#weight-path)). Cached models are RunPod's stated recommendation for HF-hosted models, so a weight-delivery comparison that omits them measures yesterday's platform. If 2b time runs short, this endpoint is the one dropped — the two-way comparison stands on its own.
+
+**Precondition, run first.** Every endpoint must report the same `sha256` over its weight files ([07](07-testing.md)). If they differ, one is running a different revision — a stale volume, a stale image, or a cache staged from `main` rather than the pinned SHA — and every row below compares two variables at once. **The comparison is void until this passes.**
 
 Deliberately *not* a pixel comparison. Two invocations land on different physical GPUs, and bf16 kernels and cuDNN algorithm selection are not bit-reproducible across hosts — an image diff would fail for reasons that have nothing to do with weights, and this spec would then discard its headline comparison over a non-problem. The hash is exact, costs no GPU time, and needs no credits.
 

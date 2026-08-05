@@ -103,11 +103,27 @@ Snapping is silent by design, unlike prompt truncation: the difference between 1
 
 **Base64 is the default, and the platform decides it.**
 
-RunPod serverless exposes a fixed surface — `/run`, `/status/{job_id}`, `/stream`, `/cancel`, `/health`. Custom routes cannot be added. So `GET /status/{job_id}` returns **the handler's return value verbatim**, and there is nowhere else a caller can obtain a result from.
+RunPod serverless exposes a fixed surface — `/run`, `/runsync`, `/status/{job_id}`, `/stream`, `/cancel`, `/retry`, `/health`. Custom routes cannot be added. So `GET /status/{job_id}` returns **the handler's return value verbatim**, and there is nowhere else a caller can obtain a result from.
+
+Results are retained 30 minutes after completion for `/run` and 1 minute for `/runsync`. Any poller — the client, the gateway reconciler — must fetch within that window; after it, `/status` has nothing to return.
 
 That makes the rule simple: whatever the handler does not put in its output does not exist as far as a direct caller is concerned. A storage key in the output hands the reviewer a key they cannot resolve, because resolving it requires storage credentials or a gateway they are not running. The brief asks the endpoint to *return a generated image*; only base64 satisfies that unconditionally.
 
-At 1024² PNG this is ~2MB, ~2.7MB encoded. Measured against the response ceiling in [09](09-benchmarks.md) at 1536², with JPEG as the fallback if it binds.
+At 1024² PNG this is ~2MB, ~2.7MB encoded. Request caps are documented — 10MB for `/run`, 20MB for `/runsync` — but no ceiling is documented for the `/status` response, so it is measured in [09](09-benchmarks.md) at 1536², with JPEG as the fallback if it binds.
+
+### The demonstration is one `/runsync` call
+
+The case study's test criterion is *"accept a text input and return a generated image."* `/runsync` holds the connection and returns the finished output in one response, so the demonstration is a single command:
+
+```bash
+curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"prompt": "a red fox in falling snow"}}' \
+  | jq -r '.output.image_base64' | base64 -d > fox.png
+```
+
+This works because a warm job finishes in ~20-25s and 2.7MB fits the 20MB `/runsync` cap. It needs a warm worker — a cold start would outlast the hold — which is one reason the demo window runs with an active worker. It is the demo path only; everything about async as the service interface ([00](00-overview.md#async-as-the-default)) stands.
 
 ### Storage: opt-in, not default
 
@@ -133,11 +149,13 @@ Any other pipeline exception maps to `INFERENCE_FAILED` with the detail logged a
 
 | Setting | Value | Reason |
 |---|---|---|
-| GPU | L40S 48GB | bf16 FLUX needs ~24-26GB steady, more at 1536². 24GB is too tight to be safe. |
-| Workers | min 0, max 3 | Scale to zero. 3 demonstrates concurrency. |
+| GPU | L40S 48GB | bf16 weights are ~34GB resident (23.8GB transformer + ~9.5GB T5-XXL + CLIP + VAE), plus activations. A 24GB card cannot hold the model; 48GB is the floor with headroom. |
+| GPU priority | L40S → A100 80GB | An endpoint accepts up to three GPU types in priority order. The fallback keeps the demo alive when L40S is scarce; benchmark runs pin a single type so the numbers stay comparable. |
+| Workers | min 0, max 3 | Scale to zero. 3 demonstrates concurrency. **min 1 during the demo window** — an active worker eliminates the cold start and is what makes `/runsync` viable. Billed continuously; set back to 0 after. |
 | FlashBoot | on | Keeps VRAM resident between jobs. |
 | Idle timeout | 60s | Long enough that a demo sequence stays warm. |
 | Execution timeout | 300s | Above worst-case 50-step 1536². |
+| Job TTL | default (24h) | If it expires mid-run the job vanishes and `/status` returns 404 — the default is far above any real job here. |
 | `concurrency_modifier` | 1 | GPU-bound; a second concurrent job only causes VRAM contention. |
 
 **Provisional.** L40S is the reasoned starting point. The final recommendation comes from measured Phase 2b numbers across at least L40S and A100 80GB.
@@ -179,6 +197,6 @@ It is not built because of a structural obstacle rather than a lack of appetite.
 
 ## Weight path
 
-The worker resolves weights from `WEIGHTS_PATH` in settings. It does not know or care which deployment variant it is running under — baked into the image or mounted from a network volume ([06](06-build-deploy.md)). One code path, two deployments.
+The worker resolves weights from `WEIGHTS_PATH` in settings. It does not know or care which deployment variant it is running under — baked into the image, mounted from a network volume, or pre-staged by RunPod's cached-models feature at `/runpod-volume/huggingface-cache/hub/models--black-forest-labs--FLUX.1-dev/snapshots/{revision}/` ([06](06-build-deploy.md)). One code path, three deployments.
 
 Startup fails fast if `WEIGHTS_PATH` does not exist. Without that check a misconfigured volume mount falls through to downloading 33GB from HuggingFace on every cold start, which presents as "slow" rather than "broken" and can survive a whole benchmark run undetected.
