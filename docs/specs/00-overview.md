@@ -14,6 +14,7 @@ Entry point for the spec set. Read this first, then the spec covering the area y
 | [06 — Build & deploy](06-build-deploy.md) | Image, weights, CI, deploy, rollback |
 | [07 — Testing](07-testing.md) | Strategy across both tiers |
 | [08 — Production readiness](08-production-readiness.md) | What is deliberately not built, and what prod would cost |
+| [09 — Benchmarks](09-benchmarks.md) | Measurement methodology and what gets reported |
 
 > **Diagram:** system context — *pending Excalidraw*
 
@@ -22,6 +23,20 @@ Entry point for the spec set. Read this first, then the spec covering the area y
 Deploy a serverless endpoint on RunPod running an ML model, accepting a text prompt and returning a generated image. Deliverables: `handler.py`, a Docker image containing the handler **and the model**, a deployed endpoint, a demonstration, and documentation.
 
 Graded on: following the setup instructions, handler/model integration, successful deployment, documentation clarity.
+
+## Deliverable
+
+What is actually handed over:
+
+| Artefact | Role |
+|---|---|
+| Repository | Code, specs, and history. The history is itself evidence of how the decisions were reached |
+| `README.md` | Entry point — what it is, how to run it, how to call it, measured results |
+| **`BENCHMARKS.md`** | **The centrepiece.** Measured performance and cost, with methodology stated — see [09](09-benchmarks.md) |
+| Generated images | Committed samples with their prompts and seeds, so any result is reproducible |
+| Endpoint details | ID and a working request, so the reviewer can call it themselves |
+
+`BENCHMARKS.md` carries the most weight. A working endpoint demonstrates the task was completed; a rigorous benchmark demonstrates the deployment was *understood* — where the time goes, what it costs, where it breaks, and which GPU is actually right rather than assumed.
 
 ## Scope
 
