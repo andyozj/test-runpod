@@ -43,6 +43,14 @@ The protocol boundary in [02](02-gateway-core.md) means each is an addition rath
 | **MCP** | None — the client is an agent framework and the tool schema is the contract | Agent-native call with zero glue | A thin wrapper over async. Cheap to add; out of scope |
 | **gRPC** | Codegen and a toolchain | Efficient streaming, typed contract | No consumer asking for it |
 
+## Why the result shape decides which facades are possible
+
+The worker returns a storage **reference**, not image bytes ([01](01-worker.md)). That single choice is what keeps the table above open.
+
+A ~200-byte result can be pushed: it fits in an SSE event, a webhook body, a WebSocket frame, an MCP tool result. A 2.7MB base64 blob fits in none of them comfortably, and a client polling every 2s would re-download it on every call until the job finished.
+
+So the decision about which transports are *available* is made in the worker's serialisation, not in the API layer — and it is made once, early, in the place least visible to whoever later wants to add streaming. Returning bytes would foreclose event-driven delivery entirely while looking like a local choice about response encoding.
+
 ## Why the boundary is what makes this cheap
 
 Each facade above translates HTTP-shaped input into a `JobService` call and translates the result back. None of them touch persistence, RunPod, or the domain rules.
