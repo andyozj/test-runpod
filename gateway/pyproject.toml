@@ -1,0 +1,94 @@
+[project]
+name = "gateway"
+version = "0.1.0"
+description = "API gateway in front of the FLUX.1-dev serverless endpoint"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "ruff>=0.7",
+    "mypy>=1.11",
+    "import-linter>=2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gateway"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "C4", "SIM",
+    "D", "T20", "S", "C90", "PLR0913", "PLR0915", "PLR2004",
+]
+ignore = ["E501", "D107"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**" = ["D", "S101", "PLR2004"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-statements = 50
+
+[tool.ruff.lint.isort]
+known-first-party = ["gateway"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not gpu' --strict-markers"
+markers = ["gpu: requires a live GPU or deployed endpoint"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/gateway"]
+
+# core/ must not import outward. A stray `from fastapi import HTTPException`
+# in the domain passes ruff, mypy and every test while welding the rules to one
+# transport; the cost surfaces only when the second facade turns out to be a
+# rewrite. See docs/specs/02-gateway-core.md.
+[tool.importlinter]
+root_package = "gateway"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "core depends on nothing outward"
+type = "forbidden"
+source_modules = ["gateway.core"]
+forbidden_modules = [
+    "gateway.api",
+    "gateway.adapters",
+    "gateway.workers",
+    "fastapi",
+    "httpx",
+    "uvicorn",
+]
