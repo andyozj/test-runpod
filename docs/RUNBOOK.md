@@ -74,9 +74,24 @@ Update this table on every deploy. **A rollback procedure that begins with "work
 
 6. **Terminate the Pod.** It bills by the hour while running.
 
-## Populate the network volume (required)
+## Enable cached models (the deployed path)
 
-The deployed endpoint mounts a volume, so this is on the critical path, not an optional extra. Do it **before** deploying.
+No population step, no volume, no Pod. RunPod stages the repository on host machines itself.
+
+1. On the endpoint, set **Model** to `black-forest-labs/FLUX.1-dev`.
+2. Supply a **HuggingFace token** — the repo is gated, so staging fails without one. The same token used for the build is fine.
+3. Leave `WEIGHTS_PATH` **unset** in the endpoint environment. The worker falls through to `MODEL_CACHE_ROOT` only when it is absent; setting it would silently win and the cache would go unused.
+4. Deploy with the **volume image tag** — cached and volume share one image.
+
+First worker start pulls a ~10GB image and finds the model already on the host. Staging pulls the whole repository, so the ~24GB duplicate single-file weights come along; that is unbilled and not our disk, but it is why scale-up is measured rather than assumed.
+
+If the worker refuses to start with a revision mismatch, the cache holds a different snapshot than `contracts/model-revision.txt`. That is the resolver working: it will not run a model the response would then misreport.
+
+**Beta.** If it misbehaves, deploy `volume.yaml` with the same tag — no rebuild.
+
+## Populate the network volume (fallback and benchmark only)
+
+Only needed for the volume endpoint. Skip if cached models are working.
 
 1. Create a network volume, ~50GB, in a datacenter that also has L40S capacity. It must be one of the five supporting the S3 API if image storage is ever enabled: `EUR-IS-1`, `EU-RO-1`, `EU-CZ-1`, `US-KS-2`, `US-CA-2`.
 2. Attach it to a Pod at `/runpod-volume`.
@@ -95,15 +110,18 @@ The deployed endpoint mounts a volume, so this is on the critical path, not an o
 ```bash
 export RUNPOD_API_KEY=...
 
-# The deployed endpoint. Requires the volume to exist and be populated.
-python scripts/apply_endpoint.py --config deploy/endpoints/volume.yaml --tag $TAG-volume --dry-run
-python scripts/apply_endpoint.py --config deploy/endpoints/volume.yaml --tag $TAG-volume
+# The deployed endpoint. Uses the volume image; weights come from the cache.
+python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml --tag $TAG-volume --dry-run
+python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml --tag $TAG-volume
 
-# The baked endpoint, for the benchmark comparison. Optional.
-python scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml --tag $TAG-baked
+# Then set Model + HF token on the endpoint (console). See the section above.
+
+# Fallback and benchmark endpoints. Optional.
+python scripts/apply_endpoint.py --config deploy/endpoints/volume.yaml --tag $TAG-volume
+python scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml  --tag $TAG-baked
 ```
 
-If the endpoint starts but every job fails instantly, the volume is not mounted where `WEIGHTS_PATH` expects. The worker fails fast with the path in the message rather than silently re-downloading 33GB per cold start.
+If every job fails instantly, read the startup error — it names all three mechanisms and which one it looked for. The worker fails fast rather than silently re-downloading ~33GB per cold start, which would present as "slow" rather than "broken".
 
 Then **record the tag and the previous tag** in the deploy table above.
 
@@ -134,7 +152,8 @@ Ordered by how often each is actually the cause.
 
 | Symptom | Likely cause | Check |
 |---|---|---|
-| Every job fails immediately | `WEIGHTS_PATH` wrong, or volume not mounted | Worker logs — startup fails fast with the path in the message |
+| Every job fails immediately | Weights not found, or the cache holds a different revision | Worker logs — `weights_resolved` line on success; a fail-fast message naming all three mechanisms otherwise |
+| Worker refuses to start, revision mismatch | Cache staged a snapshot other than the pinned one | Reconcile `contracts/model-revision.txt` with what the message reports as present |
 | Jobs stuck `IN_QUEUE`, no workers | No GPU capacity in the pinned datacenter | `GET /v2/{id}/health` → `workers.running` stays 0 |
 | First job very slow, later ones fine | Normal cold start | `pipeline_loaded` duration in worker stdout |
 | **Every** job slow, no `pipeline_loaded` line | Volume misconfigured; the worker is re-downloading 33GB each start | Worker logs — should have failed fast; if it did not, the startup check is broken |
@@ -158,7 +177,7 @@ That last row is the one that will waste your time if you do not know it in adva
 
 ## Teardown
 
-1. Delete both endpoints (RunPod console or `deleteEndpoint`).
+1. Delete every endpoint (RunPod console or the API).
 2. Delete the network volume — it bills per GB per month for as long as it exists.
 3. Terminate any Pods.
 4. Revoke the `HF_TOKEN` if it was created for this exercise.

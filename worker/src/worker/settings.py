@@ -15,9 +15,11 @@ class Settings(BaseSettings):
     Attributes:
         model_id: HuggingFace repository the weights came from.
         model_revision: Pinned commit SHA, recorded on every result.
-        weights_path: Directory holding the diffusers layout. Baked into the
-            image or mounted from a network volume; the worker does not care
-            which, which is what lets one build serve both deployments.
+        weights_path: Directory holding the diffusers layout, when weights are
+            baked into the image or mounted from a network volume.
+        model_cache_root: HuggingFace cache hub directory, where RunPod
+            pre-stages a cached model. Used only when `weights_path` is absent,
+            so one build serves all three delivery mechanisms.
         storage_enabled: When true, upload the image and return a key instead
             of inline base64.
         log_level: Root log level.
@@ -28,6 +30,7 @@ class Settings(BaseSettings):
     model_id: str = "black-forest-labs/FLUX.1-dev"
     model_revision: str = Field(default="main", min_length=1)
     weights_path: Path = Path("/opt/weights")
+    model_cache_root: Path = Path("/runpod-volume/huggingface-cache/hub")
     storage_enabled: bool = False
     log_level: str = "INFO"
 

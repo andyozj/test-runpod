@@ -44,7 +44,7 @@ What is actually handed over:
 |---|---|
 | Model | `black-forest-labs/FLUX.1-dev`, bf16, unquantized |
 | Inference | `diffusers.FluxPipeline`. No `torch.compile`, no ComfyUI |
-| Weights | **Network volume is the deployed variant.** The baked image is also built, published and benchmarked, since the brief asks for an image containing the model |
+| Weights | **Cached models is the deployed variant.** Volume and baked images are also built and benchmarked; the baked one because the brief asks for an image containing the model |
 | Build host | RunPod GPU Pod |
 | Registry | GHCR |
 | Tiers | Serverless worker (graded) + FastAPI gateway (beyond the brief) |
@@ -58,24 +58,29 @@ What is actually handed over:
 
 The brief is explicit: *"Build a Docker image that includes your serverless handler and the model."*
 
-The deployed endpoint nevertheless mounts a network volume. Both are built from one Dockerfile via `BAKE_WEIGHTS`, and the baked image is published so the artefact the brief names demonstrably exists — but the volume is what serves traffic.
+The deployed endpoint nevertheless uses **cached models**: RunPod pre-stages the HuggingFace repository on host machines before a worker starts, preferring hosts that already hold it. All three are built from one Dockerfile via `BAKE_WEIGHTS`, and the baked image is published so the artefact the brief names demonstrably exists — but the cached endpoint is what serves traffic.
+
+Cached models dominate the volume on every axis that matters here. A volume's cost is the datacenter pin, which narrows the GPU pool exactly when scaling up under load — the moment the volume was supposed to help. Cached models remove that pin, remove the per-GB storage bill, and make the weight transfer unbilled. The volume endpoint remains as the fallback and the benchmark comparison, and needs no rebuild: the same ~10GB image serves both.
+
+Two caveats, stated rather than discovered. It is **beta**. And staging pulls the *whole* repository, so the ~24GB of duplicate single-file weights come along — ~56GB rather than ~33GB. That costs us nothing directly, since neither the transfer nor the storage is billed, but it is the reason the effect on scale-up must be measured rather than assumed.
 
 Stating the tension rather than hiding it: this is a deviation from the literal instruction, made deliberately, and the README says so in as many words. Network volumes are also one of RunPod's distinguishing features, so the deployment exercises the platform rather than treating it as a container host.
 
-| | Baked | Network volume |
-|---|---|---|
-| Image size | ~45GB | ~10GB |
-| Fresh-worker scale-up | Pull 45GB | Pull 10GB, mount weights |
-| Warm worker | Image layer cached, disk → VRAM | Volume read → VRAM |
-| Region | Unconstrained with storage off; five-datacenter choice with it on | **Pinned to the volume's datacenter** |
-| Build/push iteration | Slow | Fast |
-| Storage cost | None beyond registry | Per-GB, per-month |
+| | Baked | Network volume | **Cached models** |
+|---|---|---|---|
+| Image size | ~45GB | ~10GB | ~10GB (same image) |
+| Fresh-worker scale-up | Pull 45GB | Pull 10GB, mount weights | Pull 10GB; host already holds the model |
+| Region | Unconstrained | **Pinned to the volume's datacenter** | **Unconstrained** |
+| Build/push iteration | Slow | Fast | Fast |
+| Storage cost | None beyond registry | Per-GB, per-month | **None** |
+| Weights transfer | Billed once at build | Billed once at population | **Unbilled, pre-staged** |
+| Maturity | Stable | Stable | **Beta** |
 
 The region constraint is the tradeoff that usually goes unwritten: a volume pins the endpoint to one datacenter, which narrows the GPU pool available — and that bites precisely when scaling up under load, which is the moment the volume was supposed to help.
 
-The hypothesis worth testing is that baked wins on availability and steady state, while the volume wins on scale-up latency and on iteration speed during development. [09](09-benchmarks.md) measures it rather than assuming it.
+The hypothesis worth testing is that cached models win on scale-up and on operational simplicity, baked wins on predictability, and the volume wins on nothing once cached models work — which is exactly the kind of claim that deserves measurement rather than assertion. [09](09-benchmarks.md) measures all three.
 
-The worker code is identical across both. Only the weight path differs, resolved from settings, so this is a deployment variant rather than a code fork.
+The worker code is identical across all three. `weights.resolve()` tries the configured path, then the model cache, so a deployment selects a mechanism by configuration alone — there is no code fork and no third image.
 
 ## Two design rules that everything else follows from
 

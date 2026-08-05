@@ -83,4 +83,10 @@ ENV PYTHONPATH=/app/src
 ARG MODEL_REVISION=main
 ENV MODEL_REVISION=${MODEL_REVISION}
 
+# Never reach for the network at load time. The pipeline already passes
+# local_files_only=True; these make a misconfiguration fail loudly instead of
+# quietly re-downloading and looking like a slow cold start.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
 CMD ["python", "-m", "worker.handler"]

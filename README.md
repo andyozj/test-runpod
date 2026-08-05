@@ -1,6 +1,6 @@
 # FLUX.1-dev on RunPod Serverless
 
-A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod with weights on a network volume. The baked-weights image is built and published too — see [Weight delivery](#weight-delivery).
+A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod using cached models — the platform pre-stages the weights on host machines. The baked-weights image is built and published too — see [Weight delivery](#weight-delivery).
 
 > **Status:** the worker is implemented and tested; the endpoint is not yet deployed. `BENCHMARKS.md` does not exist until it is, and no figure below is presented as measured. See [Current state](#current-state).
 
@@ -157,16 +157,22 @@ make build-baked  IMAGE=$IMAGE TAG=$TAG   # ~45GB, published
 
 The brief says *"Build a Docker image that includes your serverless handler and the model."* Both images are built from one `Dockerfile` via the `BAKE_WEIGHTS` argument, and the baked one is published — but **the deployed endpoint mounts a network volume.**
 
-That is a deliberate deviation, stated rather than hidden. Network volumes are a distinguishing RunPod feature, and using one exercises the platform instead of treating it as a container host. The costs are real and measured rather than waved away:
+That is a deliberate deviation, stated rather than hidden — and it exercises the platform rather than treating RunPod as a container host. The costs are named rather than waved away:
 
-| | Baked (~45GB) | Volume (~10GB) |
-|---|---|---|
-| Fresh-worker scale-up | Pull 45GB | Pull 10GB, mount weights |
-| Region | Any datacenter with capacity | **Pinned to the volume's datacenter**, narrowing the GPU pool — precisely when scaling up |
-| Build and push iteration | 30-60 min | Minutes |
-| Storage cost | None beyond the registry | Per GB, per month |
+| | Baked (~45GB) | Volume (~10GB) | **Cached (~10GB)** |
+|---|---|---|---|
+| Fresh-worker scale-up | Pull 45GB | Pull 10GB + mount | Pull 10GB; host already holds the model |
+| Region | Any with capacity | **Pinned to the volume's datacenter** | **Any with capacity** |
+| Build and push | 30-60 min | Minutes | Minutes (same image) |
+| Storage cost | Registry only | Per GB, per month | **None** |
+| Weight transfer | Billed at build | Billed at population | **Unbilled** |
+| Maturity | Stable | Stable | **Beta** |
 
-Both are benchmarked head to head; methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
+Cached models is deployed. A volume's cost is its datacenter pin, which narrows the GPU pool exactly when scaling up under load — the moment the volume was meant to help — and cached models remove it. Staging does pull the whole repo, so the ~24GB duplicate comes along, but neither the transfer nor the storage is billed.
+
+The volume endpoint is retained as a fallback and needs no rebuild: **one image serves all three.** `weights.resolve()` tries the configured path, then the model cache, and refuses to start if the cache holds a revision other than the pinned one — RunPod's own example picks an arbitrary snapshot, which would misattribute every image.
+
+All three are benchmarked; methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
 
 Two details that will otherwise cost you an hour each:
 
@@ -179,7 +185,7 @@ Two details that will otherwise cost you an hour each:
 |---|---|
 | Model | FLUX.1-dev, bf16, unquantized, revision pinned in `contracts/model-revision.txt` |
 | Inference | `diffusers.FluxPipeline`. No `torch.compile` — 3-10 min of compilation on every cold start is net slower for serverless traffic |
-| Weights | **The deployed endpoint mounts a RunPod network volume.** The baked image is also built and published — see *Weight delivery* below |
+| Weights | **Cached models.** RunPod pre-stages the repo on hosts; no datacenter pin, no storage cost. Volume and baked variants also built — see *Weight delivery* below |
 | GPU | L40S 48GB. bf16 weights are ~34GB resident (23.8GB transformer + ~9.5GB T5-XXL), plus activations — a 24GB card cannot hold the model |
 | Concurrency | `concurrency_modifier = 1`. The worker is GPU-bound; a second concurrent job causes VRAM contention, not throughput |
 

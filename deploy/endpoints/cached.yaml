@@ -1,0 +1,52 @@
+# Cached-models endpoint. RunPod pre-stages the HuggingFace repo on host
+# machines before a worker starts, preferring hosts that already hold it.
+#
+#   python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml \
+#     --tag 0.1.0-<sha>-volume
+#
+# Reuses the ~10GB volume image: no weights baked in, and the worker resolves
+# them from the cache when WEIGHTS_PATH is absent. No code change.
+#
+# BETA. If it misbehaves, the volume endpoint is the fallback and needs no
+# rebuild — the same image serves both.
+
+name: flux-worker-cached
+image_repository: ghcr.io/OWNER/flux-worker
+
+gpu_types:
+  - NVIDIA L40S
+  - NVIDIA A100 80GB PCIe
+
+workers:
+  min: 0
+  max: 3
+
+idle_timeout_s: 60
+execution_timeout_ms: 300000
+flashboot: true
+concurrency_modifier: 1
+
+# DIFFERENCE from volume.yaml: no volume, so no datacenter pin. This is the
+# whole point — the GPU pool is not narrowed, and it is not narrowed precisely
+# when scaling up under load.
+network_volume_id: null
+datacenter: null
+
+# Set in the endpoint's Model field, not here: RunPod stages this repo and
+# needs an HF token because FLUX.1-dev is gated.
+#   Model:     black-forest-labs/FLUX.1-dev
+#   HF token:  a read token with the licence accepted
+cached_model: black-forest-labs/FLUX.1-dev
+
+env:
+  # Deliberately unset so the worker falls through to MODEL_CACHE_ROOT.
+  # WEIGHTS_PATH: unset
+  MODEL_CACHE_ROOT: /runpod-volume/huggingface-cache/hub
+  STORAGE_ENABLED: "false"
+  LOG_LEVEL: INFO
+  # Belt and braces per RunPod's docs: even though the pipeline already passes
+  # local_files_only=True, these stop any library reaching for the network at
+  # load time — which on a cold worker would look like a slow start rather
+  # than a misconfiguration.
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"

@@ -87,13 +87,19 @@ Base: `nvidia/cuda:12.4.1-runtime-ubuntu22.04`. `runtime` not `devel` — the de
 
 Expected final size ~45GB.
 
-## Two weight-delivery variants
+## Three weight-delivery variants
 
-Both are built. The worker code is identical; only the weight path differs, so this is one image definition with a build argument rather than two codebases.
+All three are built from one image definition. The worker code is identical; `weights.resolve()` tries the configured path, then the model cache, so a deployment picks a mechanism by configuration alone.
 
 **Baked.** `fetch_weights.py` runs at build time, weights land in the image, `WEIGHTS_PATH` points at the image path. ~45GB, no region constraint. Built and published because the brief names it; not the deployed variant.
 
-**Network volume (deployed).** The weights layer is skipped, producing a ~10GB image. A RunPod network volume is populated once from a Pod and mounted at `/runpod-volume`; `WEIGHTS_PATH` points there. This is what serves traffic.
+**Network volume.** The weights layer is skipped, producing a ~10GB image. A RunPod network volume is populated once from a Pod and mounted at `/runpod-volume`; `WEIGHTS_PATH` points there. Retained as the fallback and the benchmark comparison.
+
+**Cached models (deployed).** The same ~10GB image, with `WEIGHTS_PATH` deliberately unset. RunPod pre-stages the repository on host machines and mounts the HuggingFace cache; the worker resolves `models--{org}--{name}/snapshots/{revision}` beneath `MODEL_CACHE_ROOT`. Enabled by the endpoint's **Model** field plus an HF token, since FLUX.1-dev is gated. No code change, no third image, no datacenter pin, no storage bill.
+
+**The resolver refuses a revision mismatch.** RunPod's own example sorts the available snapshots and takes the first, which would run a model the response then reports as the pinned revision — misattributing every image and silently invalidating any comparison between endpoints. Ours starts only if the pinned revision is present, and names what it found instead.
+
+Beta, so the volume endpoint stays deployable as a fallback from the same image.
 
 ```dockerfile
 ARG BAKE_WEIGHTS=true

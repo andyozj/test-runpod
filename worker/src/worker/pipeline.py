@@ -74,26 +74,19 @@ def _load_pipeline() -> ImagePipeline:  # pragma: no cover - requires a GPU
         The pipeline, resident on CUDA.
 
     Raises:
-        RuntimeError: If the configured weights path does not exist. Failing
-            fast here prevents a misconfigured volume mount from silently
-            falling back to downloading 33GB on every cold start, which
-            presents as "slow" rather than "broken".
+        WeightsNotFoundError: No usable weights were found. See `weights.resolve`.
     """
     import torch
     from diffusers import FluxPipeline
 
+    from worker import weights
+
     settings = get_settings()
-    if not settings.weights_path.exists():
-        msg = (
-            f"Weights not found at {settings.weights_path}. "
-            "Check WEIGHTS_PATH and, for the volume variant, that the network "
-            "volume is mounted and in the same datacenter as the endpoint."
-        )
-        raise RuntimeError(msg)
+    path = weights.resolve(settings)
 
     started = time.perf_counter()
     pipe = FluxPipeline.from_pretrained(
-        settings.weights_path,
+        path,
         torch_dtype=torch.bfloat16,
         local_files_only=True,
     )
