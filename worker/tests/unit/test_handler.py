@@ -65,7 +65,7 @@ def test_absent_seed_is_generated_and_echoed(
     assert isinstance(output["seed"], int)
 
 
-def test_progress_is_reported_once_per_step(
+def test_progress_callback_fires_once_per_step(
     pipeline: FakePipeline, settings: Settings
 ) -> None:
     seen: list[tuple[int, int]] = []
@@ -76,6 +76,23 @@ def test_progress_is_reported_once_per_step(
     generate(request, pipeline, settings, on_progress=lambda s, t: seen.append((s, t)))
 
     assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
+def test_progress_reporting_is_throttled_to_stride() -> None:
+    reported: list[int] = []
+    last = -handler_module.PROGRESS_STRIDE_PCT
+    for step in range(1, 29):
+        if handler_module.should_report_progress(step, 28, last):
+            last = round(100 * step / 28)
+            reported.append(step)
+
+    assert len(reported) <= 100 // handler_module.PROGRESS_STRIDE_PCT + 1
+    assert reported[0] == 1  # pollers must see life before the first stride
+    assert reported[-1] == 28
+
+
+def test_progress_final_step_always_reports() -> None:
+    assert handler_module.should_report_progress(4, 4, last_percent=100)
 
 
 def test_oom_sets_refresh_worker(settings: Settings) -> None:

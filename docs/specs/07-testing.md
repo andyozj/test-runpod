@@ -44,7 +44,7 @@ A drift here is the nastiest failure available: the gateway accepts a request th
 | Handler OOM | Fake raising `torch.cuda.OutOfMemoryError`; asserts `refresh_worker: True` and the `OOM` code |
 | Handler failure | Fake raising a generic exception; asserts `INFERENCE_FAILED` and that internal detail is **not** in the response |
 | Seed | Absent seed is randomised and echoed; supplied seed reaches the pipeline unchanged |
-| Progress | `callback_on_step_end` drives one `progress_update` per step with correct step/total/percent |
+| Progress | `callback_on_step_end` fires per step; `progress_update` is throttled to every `PROGRESS_STRIDE_PCT` — first step and final step always report, and the call count is bounded by ~100/stride regardless of steps |
 | Guardrail: prompt | Normalisation defeats casing, spacing, punctuation, zero-width characters, combining marks, confusable substitution — one parametrized case per evasion, using synthetic tokens |
 | Guardrail: false positives | Word-boundary matching does not fire on blocked substrings inside innocent words. This is the failure that makes naive blocklists unusable |
 | Guardrail: chain | Returns the most severe verdict across members |

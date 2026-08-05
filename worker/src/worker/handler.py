@@ -201,8 +201,31 @@ def _run(
     )
 
 
+PROGRESS_STRIDE_PCT = 10
+
+
+def should_report_progress(step: int, total: int, last_percent: int) -> bool:
+    """Decide whether this step's progress is worth an upstream call.
+
+    The SDK's `progress_update` spawns a thread, an event loop, and a TLS
+    session per call, so per-step reporting costs 28 of each per image for
+    granularity no poller can observe. Reporting every `PROGRESS_STRIDE_PCT`
+    bounds the cost at ~10 calls per job regardless of step count.
+
+    Args:
+        step: The completed step, 1-based.
+        total: Total steps.
+        last_percent: The percent value most recently reported.
+
+    Returns:
+        True for the final step and whenever progress advanced a full stride.
+    """
+    percent = round(100 * step / total)
+    return step == total or percent >= last_percent + PROGRESS_STRIDE_PCT
+
+
 def _progress_reporter(job: dict[str, Any]) -> ProgressCallback | None:
-    """Build a progress callback that writes into the RunPod job record.
+    """Build a throttled progress callback writing into the RunPod job record.
 
     Progress is not logged: it is already visible on the job, and 28 log lines
     per image describe something nobody reads twice.
@@ -221,9 +244,15 @@ def _progress_reporter(job: dict[str, Any]) -> ProgressCallback | None:
     except ImportError:  # pragma: no cover - runpod is present in the image
         return None
 
+    last = {"percent": -PROGRESS_STRIDE_PCT}
+
     def _report(step: int, total: int) -> None:
+        if not should_report_progress(step, total, last["percent"]):
+            return
+        percent = round(100 * step / total)
+        last["percent"] = percent
         runpod.serverless.progress_update(
-            job, {"step": step, "total": total, "percent": round(100 * step / total)}
+            job, {"step": step, "total": total, "percent": percent}
         )
 
     return _report

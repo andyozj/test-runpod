@@ -172,7 +172,7 @@ Without this, every poll during generation returns `IN_PROGRESS` and nothing els
 
 It also changes what the downstream facades are worth. A stream carrying one completion event is decorative; a stream carrying live progress is the reason SSE exists ([03](03-facades.md)).
 
-Progress is emitted at most once per step and is a small dict. The callback runs between steps on the GPU thread, so it must stay trivial — anything expensive here is paid 28 times per image.
+Progress is throttled to every 10 percentage points (first and final step always report), because the SDK's `progress_update` spawns a thread, an event loop, and a TLS session per call — per-step reporting costs 28 of each per image for granularity no polling client can observe. The callback itself runs between steps on the GPU thread, so the decision to skip must stay trivial, and it is: one integer comparison.
 
 ### Not built: preview images
 
