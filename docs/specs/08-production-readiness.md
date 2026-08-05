@@ -2,6 +2,10 @@
 
 An honest account of what this is not. The engineering is production-*shaped*; it is not production-*ready*, and the gap is enumerated here rather than left for a reviewer to find.
 
+> **Status: this document describes the intended delivered state, and no code exists yet.**
+>
+> It is the document most easily made false — every row in *Built* is a commitment, and a reviewer will check the ones that sound impressive. Reconciling it against the shipped code is a required step before submission, not a courtesy. Anything that does not ship moves to *Not built* with the reason, and a spec that overstates what was delivered destroys the credibility of the parts that are accurate.
+
 ## Built
 
 | Concern | Implementation |
@@ -17,8 +21,12 @@ An honest account of what this is not. The engineering is production-*shaped*; i
 | Queue-depth visibility | `endpoint_health` logged every 2s — a log-based time series of depth and worker counts |
 | Reproducibility | Seed always echoed, model revision pinned in `contracts/`, `model_version` on every result |
 | Credential containment | Storage keys never leave the server; the gateway proxies image bytes |
-| Deploy safety | Immutable `{version}-{sha}-{variant}` tags, documented rollback, `latest` never deployed |
+| Deploy safety | Immutable `{version}-{sha}-{variant}` tags, one-input rollback workflow, `latest` never deployed |
+| Secret management | RunPod secrets manager, referenced as `{{ RUNPOD_SECRET_* }}`. No plaintext credential in committed config or image — [06](06-build-deploy.md#secrets) |
+| Config as code | Both endpoints declared in `deploy/endpoints/*.yaml`, applied via `saveEndpoint`. Reviewable in a diff, reconstructible after deletion |
+| Deploy automation | Manually-triggered workflow taking a tag; rollback is the same workflow with the previous tag |
 | Clean shutdown | Reconciler task cancelled and awaited under the lifespan hook, so an in-flight tick completes |
+| Prompt retention for audit | Prompts stored on the job row deliberately, so a generation can be traced to what was asked for |
 
 ## Not built
 
@@ -29,24 +37,27 @@ Ranked by what would hurt first in a real deployment.
 | 1 | **No per-caller rate limit or quota** | One caller can exhaust the budget. Auth identifies them; nothing bounds them. Queue shedding protects latency, not spend | Low — a counter table and middleware |
 | 2 | **No budget cap or spend alerting** | Cost overrun is discovered on the invoice | Low — RunPod API polling plus a threshold |
 | 3 | **No metrics export** | `endpoint_health` gives a log-based time series, but there is no scrape endpoint, no dashboard, no alerting, no SLOs | Low — `prometheus-client` and a `/metrics` route |
-| 4 | **Nothing restricts direct endpoint access** | Anyone holding the RunPod API key bypasses the gateway entirely — no auth, no idempotency, no attribution. The duplicated worker-side guardrail exists precisely because this hole cannot be closed from our side | Not closable. Mitigated by key hygiene |
-| 5 | **No image retention or deletion** | Images accumulate on the network volume indefinitely, billed per GB per month. A deletion request cannot be honoured, and neither can a takedown | Medium — lifecycle job plus a deletion route |
+| 4 | **The endpoint is a second door with one shared key** | The serverless endpoint is callable with the RunPod API key, which is account-scoped, identical for every holder, and can also create and delete resources. Anyone given it bypasses the gateway — no per-caller auth, no idempotency, no attribution — and there is no way to issue a narrower credential | Not closable from our side. Mitigated by key hygiene and by duplicating the guardrail into the worker |
+| 5 | **No retention or deletion for images or prompts** | Images accumulate on the network volume, billed per GB per month; prompts accumulate in `jobs.request`. Both are retained deliberately for audit, but with no expiry and no deletion route a takedown or erasure request cannot be honoured | Medium — lifecycle job plus a deletion route |
 | 6 | **No distributed tracing** | The correlation ID is a hand-rolled substitute. No spans, no latency breakdown between queue wait and inference | Medium — OpenTelemetry across both tiers |
 | 7 | **Circuit breaker state is per-process** | Correct for one instance, wrong for a fleet — each replica learns the outage separately | Medium — shared state in Redis |
 | 8 | **No audit trail** | Abuse investigation and takedown rest on raw logs. `flag` verdicts are recorded but nothing consumes them | Medium — append-only audit table and a review queue |
 | 9 | **`AVG_JOB_SECONDS` is a constant** | The queue-wait estimate driving the `429` does not adapt to resolution, step count, or GPU. A 50-step 1536² job is estimated the same as a 20-step 512² one | Low — rolling p50 from completed jobs |
 | 10 | **Gateway proxies image bytes** | Every image traverses the gateway. Fine at this scale; a bandwidth bottleneck at any real one | Low — presigned URLs, one route, no callers affected |
-| 11 | **No key rotation** | A leaked key is revoked by editing settings and restarting | Low — key versioning |
+| 11 | **No gateway key rotation** | A leaked gateway key is revoked by editing settings and restarting. The RunPod account key has no rotation story at all | Low — key versioning |
 | 12 | **No load test or capacity model** | Concurrency limits and the queue threshold are reasoned, not measured | Medium — a load harness and a run |
 | 13 | **No image provenance** | Output is not attributable as machine-generated | Medium — C2PA or invisible watermark |
 | 14 | **No cancellation** | A queued job cannot be stopped, and it will still be billed. RunPod supports `POST /cancel`; we expose no route | Low — a route and one adapter call |
-| 15 | **Region is pinned twice, for different reasons** | The S3 API exists in five datacenters and the volume variant pins its own. Together they narrow the GPU pool — exactly when scaling up | Medium — regional storage, or accept |
-| 16 | **Single region** | A RunPod region outage is a total outage | High |
-| 17 | **No DB backup, restore drill, or SLOs** | Recovery is untested | High — process, not code |
+| 15 | **Worker image build is outside CI** | ~45GB against ~14GB of runner disk. Build and push happen on a Pod by runbook; only deploy is automated | Medium — a self-hosted runner on a Pod |
+| 16 | **Datacenter choice is constrained** | The S3 API exists in five datacenters, and a weights volume must sit with its endpoint. Co-locating weights and image storage on one volume makes this a single constraint rather than two, but it still narrows the GPU pool | Low if co-located; otherwise accept |
+| 17 | **Single region** | A RunPod region outage is a total outage | High |
+| 18 | **No DB backup, restore drill, or SLOs** | Recovery is untested | High — process, not code |
 
 **#1 and #2 remain the pair that matter most.** Authentication answers *who*; nothing answers *how much*. Queue shedding bounds latency, not spend — a single authenticated caller submitting steadily inside the queue threshold can still run up an unbounded bill. Both are cheap to close and conspicuous to leave open.
 
-**#4 is the one that cannot be fixed here.** The serverless endpoint is a public URL with its own credential. Everything the gateway enforces — auth, idempotency, quota, attribution — is bypassed by calling RunPod directly. That is why the prompt guardrail is duplicated into the worker ([04](04-guardrails.md)), and it is the honest limit of a design where the gateway is not the only door.
+**#4 is the one that cannot be fixed from here**, and it is worth stating precisely rather than dramatically. The endpoint is not open to the world — it requires the RunPod API key. The problem is the *shape* of that key: account-scoped, identical for everyone who holds it, capable of creating and deleting resources, and impossible to narrow to "may submit jobs to this one endpoint". So there is no way to let something call the endpoint directly without also handing it the account.
+
+That is why the prompt guardrail is duplicated into the worker ([04](04-guardrails.md)): the gateway cannot be assumed to be the only door, so the safety check cannot live only there.
 
 ## Known limitations
 
@@ -74,8 +85,8 @@ Not gaps. Choices, with reasons.
 | No batch inference | Serverless is one job, one image. Batching needs a different execution model |
 | No preview-image streaming | `pipe()` blocks and the callback cannot yield, so it needs a thread, a queue, and a VAE decode per preview — [01](01-worker.md) |
 | Webhook-out, SSE, WebSocket, MCP documented not built | Each imposes real cost on the *caller* — [03](03-facades.md). The protocol boundary keeps them cheap to add |
-| Config-as-code for endpoints | Two endpoints created once do not justify it; values recorded in the runbook instead — [06](06-build-deploy.md#endpoint-creation) |
 | Gateway not hosted | A credential-backed GPU spender exposed continuously with no quota. #1 above would need closing first |
+| Prompts retained indefinitely | Deliberate: a generated image must be traceable to what was asked for, which is the basis of any abuse investigation. Retention *policy* is the gap (#5), not retention itself |
 | No fine-tuning or LoRA | Out of scope. This is a deployment and inference exercise |
 
 ## Licence

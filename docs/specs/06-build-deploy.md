@@ -126,15 +126,11 @@ Procedure lives in `RUNBOOK.md`. Summary: provision pod → clone → `docker bu
 
 ## CI
 
-CI runs lint, types, `import-linter`, and non-GPU tests. **It does not build the worker image.** Standard GitHub runners have ~14GB free disk against a ~45GB image; this is a hard stop, not a slow path, and it is recorded so nobody spends an afternoon rediscovering it.
-
-The gateway image is small and *is* built in CI.
-
 ## Deploy and rollback
 
-Deploy: build → push versioned tag → update the endpoint's image tag → workers pick it up on next cold start; FlashBoot workers drain naturally.
+Deploy: build and push on the Pod → run the deploy workflow with the new tag → `saveEndpoint` updates the endpoint → workers pick it up on next cold start; FlashBoot workers drain naturally.
 
-Rollback: repoint the endpoint at the previous tag. This works only because tags are immutable — with `latest`, the previous image no longer exists to roll back to.
+Rollback: the same workflow with the previous tag. This works only because tags are immutable — with `latest`, the previous image no longer exists to roll back to.
 
 The prior known-good tag is recorded in the runbook at each deploy. A rollback procedure that begins with "work out which tag was good" is not a rollback procedure.
 
@@ -191,15 +187,52 @@ The cost is that image bytes traverse the gateway. At this scale that is nothing
 
 Configuring the worker with S3 credentials is done through RunPod's environment settings, not `s3Config` in the job payload — the SDK supports per-request credentials, but that would mean every caller holding storage keys, which is the problem this design exists to avoid.
 
-## Endpoint creation
+## Endpoint configuration as code
 
-Created through the RunPod console, with **every value recorded in `RUNBOOK.md`**.
+RunPod's GraphQL API exposes `saveEndpoint`, which both creates and updates an endpoint — passing an existing ID modifies it in place. `deleteEndpoint` and a `myself` query round out the surface.
 
-The alternative is the REST API or `runpodctl`, which is reproducible, diffable, and recreatable. That is the better answer for anything long-lived, and it is not chosen here: two endpoints created once do not justify the configuration-as-code machinery, and the runbook keeps the settings in the repository where they can be reviewed.
+So the endpoints are **not** created by clicking through the console. Both are declared in committed config and applied by a script:
 
-The point of recording every value is that the console is not the source of truth. "Why is the idle timeout 60s?" must be answerable from the repository, and an endpoint deleted by accident must be reconstructible without archaeology.
+```
+deploy/endpoints/baked.yaml
+deploy/endpoints/volume.yaml
+scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml --tag 0.1.0-a3f21c8-baked
+```
 
-Stated as a deliberate trade rather than left as an omission.
+Each file carries GPU type, min and max workers, idle timeout, execution timeout, `concurrency_modifier`, network volume, datacenter, and environment references.
+
+The console is not the source of truth. "Why is the idle timeout 60s?" must be answerable from the repository and reviewable in a diff, and an endpoint deleted by accident must be reconstructible without archaeology. Recording values in a runbook would achieve the first two; only applied config achieves the third.
+
+## Secrets
+
+RunPod provides a secrets manager. Secrets are stored encrypted and referenced from a template's environment section:
+
+```
+HF_TOKEN={{ RUNPOD_SECRET_huggingface_token }}
+S3_ACCESS_KEY={{ RUNPOD_SECRET_s3_access_key }}
+S3_SECRET_KEY={{ RUNPOD_SECRET_s3_secret_key }}
+```
+
+The value is substituted at container start. This matters for a reason beyond storage: the endpoint config above is **committed to the repository**, so it must contain references rather than values. Without the secrets manager, config-as-code and secret hygiene would be in direct conflict — one of them would have to give.
+
+`HF_TOKEN` is still needed at *build* time as a BuildKit secret; the RunPod secret covers runtime only.
+
+## CI/CD
+
+Split by what each stage actually needs.
+
+| Stage | Runs on | Why |
+|---|---|---|
+| Lint, types, `import-linter`, tests, contract conformance | GitHub-hosted | No GPU, no weights, no large disk |
+| Gateway image build | GitHub-hosted | Small image |
+| **Worker image build and push** | **RunPod Pod** | ~45GB image against ~14GB of runner disk. A hard stop, not a slow path |
+| **Endpoint deploy** | **GitHub-hosted** | It is an API call. No disk, no image, no GPU |
+
+The insight worth stating: **build and deploy have completely different requirements.** Build needs datacenter bandwidth and tens of gigabytes of disk. Deploy needs one authenticated mutation. Coupling them would push the whole pipeline onto expensive infrastructure for the sake of its cheapest step.
+
+So the deploy workflow is manually triggered, takes a tag as input, and calls `apply_endpoint.py`. Rollback is the same workflow with the previous tag — which works only because tags are immutable.
+
+A self-hosted GitHub Actions runner on a RunPod Pod would let the build move into CI as well. Not done: it means keeping a Pod alive for a build that happens a handful of times, and the runbook procedure is adequate at this frequency.
 
 ## Configuration
 
