@@ -51,11 +51,19 @@ REQUIRED_PREFIXES = (
 def revision() -> str:
     """Return the pinned model revision from the shared contract.
 
+    Searches upward because the script sits at different depths in the repo
+    (`worker/scripts/`) and in the image (`/app/scripts/`, contracts at
+    `/app/contracts/`).
+
     Returns:
         The 40-character commit SHA.
     """
-    path = Path(__file__).resolve().parents[2] / "contracts" / "model-revision.txt"
-    return path.read_text().strip()
+    for parent in Path(__file__).resolve().parents:
+        path = parent / "contracts" / "model-revision.txt"
+        if path.exists():
+            return path.read_text().strip()
+    msg = "contracts/model-revision.txt not found in any parent directory"
+    raise FileNotFoundError(msg)
 
 
 def _matches_ignore(name: str) -> bool:
@@ -64,18 +72,20 @@ def _matches_ignore(name: str) -> bool:
     return any(fnmatch(name, pattern) for pattern in IGNORE_PATTERNS)
 
 
-def check() -> int:
+def check(rev: str) -> int:
     """Verify the ignore filter against the live repository manifest.
 
     Downloads nothing. Confirms the gated repo is reachable with the current
     token, that every required prefix is present, and that the single-file
     duplicates are excluded.
 
+    Args:
+        rev: The model revision to check against.
+
     Returns:
         A process exit code.
     """
     api = HfApi()
-    rev = revision()
     files = api.list_repo_files(REPO_ID, revision=rev)
 
     kept = [f for f in files if not _matches_ignore(f)]
@@ -104,16 +114,16 @@ def check() -> int:
     return 0
 
 
-def download(dest: Path) -> int:
-    """Download the diffusers layout at the pinned revision.
+def download(dest: Path, rev: str) -> int:
+    """Download the diffusers layout at the given revision.
 
     Args:
         dest: Directory to populate.
+        rev: The model revision to download.
 
     Returns:
         A process exit code.
     """
-    rev = revision()
     print(f"downloading {REPO_ID}@{rev} -> {dest}")
     snapshot_download(
         repo_id=REPO_ID,
@@ -155,11 +165,17 @@ def main() -> int:
         help="verify the filter against the manifest without downloading",
     )
     parser.add_argument("--dest", type=Path, default=Path("/opt/weights"))
+    parser.add_argument(
+        "--revision",
+        default=None,
+        help="model revision; defaults to contracts/model-revision.txt",
+    )
     args = parser.parse_args()
 
+    rev = args.revision or revision()
     if args.check:
-        return check()
-    return download(args.dest)
+        return check(rev)
+    return download(args.dest, rev)
 
 
 if __name__ == "__main__":

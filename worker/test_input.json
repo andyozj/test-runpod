@@ -1,0 +1,8 @@
+{
+  "input": {
+    "prompt": "a red fox in falling snow, cinematic lighting",
+    "seed": 42,
+    "num_inference_steps": 4,
+    "output_format": "jpeg"
+  }
+}

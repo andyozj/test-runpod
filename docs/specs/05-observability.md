@@ -1,6 +1,6 @@
 # 05 — Observability
 
-> **Diagram:** correlation ID propagation — *pending Excalidraw*
+> **Diagram:** [correlation ID propagation](https://excalidraw.com/#json=Uig_Bds2I3M_Cq9NVyszm,_Y0E4L_-BuLpMwEW6chxlA) — opens in Excalidraw, editable
 
 ## The serverless constraint
 

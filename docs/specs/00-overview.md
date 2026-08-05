@@ -16,7 +16,7 @@ Entry point for the spec set. Read this first, then the spec covering the area y
 | [08 — Production readiness](08-production-readiness.md) | What is deliberately not built, and what prod would cost |
 | [09 — Benchmarks](09-benchmarks.md) | Measurement methodology and what gets reported |
 
-> **Diagram:** system context — *pending Excalidraw*
+> **Diagram:** [system context](https://excalidraw.com/#json=uZeWZkY3mvbnTlHe4SFAE,Jz6Rkp2yaUftbLUiqkydew) — opens in Excalidraw, editable
 
 ## Brief
 

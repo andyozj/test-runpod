@@ -41,7 +41,15 @@ VRAM, gateway status row).
 - Reconciler/polling note (02 owns it): async results are retained **30 min** after completion,
   sync **1 min** — the reconciler must observe terminal states within that window.
 
-## worker code — build blockers, all still present
+## worker code — build blockers: FIXED 2026-08-05 evening, do not redo
+
+All four fixed in the working tree (Dockerfile COPY paths, `fetch_weights.py` upward search +
+`--revision` flag, single-interpreter uv install pinned to the lock via `uv export --frozen
+--extra gpu`, root `.dockerignore` safe for both root-context builds). `worker/test_input.json`
+added and copied into the image. `make check` green (67 tests). Local amd64 volume-variant
+build running as verification. Original list kept below for reference only.
+
+## worker code — original blocker list (reference)
 
 1. `worker/Dockerfile:37` — `COPY pyproject.toml uv.lock ./` but build context is repo root
    (`make build-*` uses `-f worker/Dockerfile .`); files are at `worker/`. Build fails at first COPY.

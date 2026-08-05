@@ -2,7 +2,7 @@
 
 Content safety at two checkpoints. `diffusers` FLUX pipelines ship **no** `safety_checker` — unlike the older Stable Diffusion pipelines, there is nothing built in. Whatever is not added here does not exist.
 
-> **Diagram:** guardrail chain — *pending Excalidraw*
+> **Diagram:** [guardrail chain](https://excalidraw.com/#json=qfBT0mQYdPnR_iafmHXQW,Ob3GBEjScWmywFHqppcU3Q) — opens in Excalidraw, editable
 
 ## Contract
 

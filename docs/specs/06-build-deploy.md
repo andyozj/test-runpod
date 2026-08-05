@@ -1,6 +1,6 @@
 # 06 — Build & deploy
 
-> **Diagram:** image layers — *pending Excalidraw*
+> **Diagram:** [image layers](https://excalidraw.com/#json=KhbTALYghWAfdJV8d5Wcs,9OZHA523fBKl-aOIJQc6Ow) — opens in Excalidraw, editable
 
 ## Two build-blockers
 

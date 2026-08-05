@@ -2,7 +2,7 @@
 
 Tier 1. Runs on RunPod Serverless. This is the graded deliverable.
 
-> **Diagram:** worker lifecycle, cold vs warm — *pending Excalidraw*
+> **Diagram:** [worker lifecycle, cold vs warm](https://excalidraw.com/#json=kwh-XFq8_sxRUP9eEND3M,7JVRVZVNXn7KKsg89QYG3Q) — opens in Excalidraw, editable
 
 ## Modules
 

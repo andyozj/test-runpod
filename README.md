@@ -185,6 +185,19 @@ Two details that will otherwise cost you an hour each:
 
 Full reasoning, including what is deliberately *not* built and what production would cost, is in [`docs/specs/`](docs/specs/00-overview.md). Engineering conventions are in [`STANDARDS.md`](STANDARDS.md).
 
+### Diagrams
+
+Each opens in Excalidraw and is editable.
+
+| Diagram | Shows |
+|---|---|
+| [System context](https://excalidraw.com/#json=uZeWZkY3mvbnTlHe4SFAE,Jz6Rkp2yaUftbLUiqkydew) | Two tiers, one direction of dependency |
+| [Worker lifecycle](https://excalidraw.com/#json=kwh-XFq8_sxRUP9eEND3M,7JVRVZVNXn7KKsg89QYG3Q) | Cold start vs warm, and why the pipeline is lazy |
+| [Job state machine](https://excalidraw.com/#json=GpbKfRPNbJuct2xSpLadJ,RQKzqy43XOY0h7AxpzIIlg) | Terminal states, and what the reconciler may not do |
+| [Guardrail chain](https://excalidraw.com/#json=qfBT0mQYdPnR_iafmHXQW,Ob3GBEjScWmywFHqppcU3Q) | Two prompt checkpoints, and why both are needed |
+| [Correlation](https://excalidraw.com/#json=Uig_Bds2I3M_Cq9NVyszm,_Y0E4L_-BuLpMwEW6chxlA) | One id from HTTP through the GPU and back |
+| [Image layers](https://excalidraw.com/#json=KhbTALYghWAfdJV8d5Wcs,9OZHA523fBKl-aOIJQc6Ow) | Why weights sit below application code |
+
 ## Repository
 
 ```

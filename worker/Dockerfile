@@ -23,8 +23,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_SYSTEM_PYTHON=1 \
     HF_HUB_DISABLE_TELEMETRY=1
 
+# No python3-pip: it depends on python3.10, and with two interpreters present
+# uv can install into one while CMD runs the other. One interpreter only,
+# and every uv call below targets it explicitly.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-venv python3-pip ca-certificates \
+        python3.11 ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
@@ -33,13 +36,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Python dependencies before weights and before code, so neither invalidates
-# this layer.
-COPY pyproject.toml uv.lock ./
-RUN uv pip install --system --no-cache \
-        "torch>=2.4" "diffusers>=0.31" "transformers>=4.44" "accelerate>=0.34" \
-        "sentencepiece>=0.2" "protobuf>=5.28" \
-        "pydantic>=2.9" "pydantic-settings>=2.5" "structlog>=24.4" \
-        "pillow>=10.4" "runpod>=1.7" "huggingface-hub>=0.25"
+# this layer. Build context is the repo root (`make build-*` passes
+# `-f worker/Dockerfile .`), so paths are repo-relative.
+# The lock is exported rather than hand-listing ranges: the image runs what
+# `uv.lock` pins, or the build fails.
+COPY worker/pyproject.toml worker/uv.lock ./
+RUN uv export --frozen --extra gpu --no-dev --no-emit-project \
+        -o /tmp/requirements.txt \
+    && uv pip install --python /usr/bin/python3.11 --no-cache \
+        -r /tmp/requirements.txt \
+    && python -c "import torch, diffusers, transformers, runpod"
 
 # Weights. HF_TOKEN arrives as a BuildKit secret and is never an ARG or ENV —
 # an ARG-passed token is recoverable from image history by anyone who pulls.
@@ -57,7 +63,10 @@ RUN --mount=type=secret,id=hf_token \
     fi
 
 # Application code last: this is the only layer that changes per commit.
+# test_input.json lands in the workdir so `python -m worker.handler` on a Pod
+# runs one real job through the SDK's local mode — the pre-endpoint smoke test.
 COPY worker/src/ /app/src/
+COPY worker/test_input.json ./
 ENV PYTHONPATH=/app/src
 
 ARG MODEL_REVISION=main

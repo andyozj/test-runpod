@@ -2,7 +2,7 @@
 
 Tier 2. The domain layer and its persistence. Contains no HTTP and no RunPod vocabulary.
 
-> **Diagram:** job state machine — *pending Excalidraw*
+> **Diagram:** [job state machine](https://excalidraw.com/#json=GpbKfRPNbJuct2xSpLadJ,RQKzqy43XOY0h7AxpzIIlg) — opens in Excalidraw, editable
 
 ## Layering
 
