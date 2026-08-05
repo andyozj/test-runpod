@@ -1,0 +1,42 @@
+# Baked-weights endpoint. The primary deliverable: the image contains the
+# handler and the model, per the brief.
+#
+# Applied with:
+#   python scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml \
+#     --tag 0.1.0-<sha>-baked
+#
+# Values here are the source of truth. "Why is idle timeout 60s?" must be
+# answerable from this repository, not from someone's browser history.
+
+name: flux-worker-baked
+image_repository: ghcr.io/OWNER/flux-worker
+
+gpu_types:
+  # Ordered by preference. bf16 FLUX needs ~24-26GB steady, so 24GB cards are
+  # excluded: too tight to be safe at 1024² and above.
+  - NVIDIA L40S
+  - NVIDIA A100 80GB PCIe
+
+workers:
+  min: 0            # scale to zero; this is a demo endpoint, not a service
+  max: 3            # enough to demonstrate concurrency and queueing
+
+idle_timeout_s: 60  # long enough that a demo sequence stays warm. Billed while
+                    # idling, so this is a real cost, not a free convenience.
+execution_timeout_ms: 300000   # above worst case 50 steps at 1536²
+flashboot: true                # keeps VRAM resident between jobs
+
+# GPU-bound. A second concurrent job causes VRAM contention, not throughput.
+concurrency_modifier: 1
+
+# No network volume: weights are in the image, so the endpoint is free to run
+# in any datacenter with capacity.
+network_volume_id: null
+datacenter: null
+
+env:
+  WEIGHTS_PATH: /opt/weights
+  STORAGE_ENABLED: "false"
+  LOG_LEVEL: INFO
+  # Secrets are references, never values — this file is committed.
+  # HF_TOKEN is a build-time BuildKit secret and is not needed at runtime.

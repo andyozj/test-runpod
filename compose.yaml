@@ -1,0 +1,26 @@
+# Local gateway. One command, two environment variables.
+#
+#   cp .env.example .env    # set RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID
+#   docker compose up
+#
+# Postgres is the specified production store (docs/specs/02-gateway-core.md).
+# The gateway currently uses an in-memory repository behind the same protocol,
+# so no database service is started — adding one without an implementation
+# using it would be scenery, not infrastructure.
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      RUNPOD_API_KEY: ${RUNPOD_API_KEY:?set RUNPOD_API_KEY in .env}
+      RUNPOD_ENDPOINT_ID: ${RUNPOD_ENDPOINT_ID:?set RUNPOD_ENDPOINT_ID in .env}
+      GATEWAY_API_KEYS: ${GATEWAY_API_KEYS:-demo:local-development-key}
+      RECONCILE_INTERVAL_S: ${RECONCILE_INTERVAL_S:-2.0}
+      JOB_DEADLINE_S: ${JOB_DEADLINE_S:-600}
+      MAX_QUEUE_WAIT_S: ${MAX_QUEUE_WAIT_S:-120}
+      AVG_JOB_S: ${AVG_JOB_S:-22}
+    restart: unless-stopped
