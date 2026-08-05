@@ -4,6 +4,14 @@
 
 Every number in it must survive being questioned.
 
+## Scope discipline
+
+**This is the last thing that happens.** It runs once, in Phase 2b, after everything else works. Nothing here is a reason to build anything earlier.
+
+Phase 2a writes only the harness, its config, and the report skeleton — enough that 2b is a single execution pass with no decisions left in it. Every measurement below must be obtainable from **one benchmark run plus the logs the system already emits**. Anything requiring new instrumentation on the hot path is out of scope by definition.
+
+The measurement list is deliberately capped. Adding a sweep costs GPU minutes and credits, and a benchmark that does not finish is worth less than a smaller one that does.
+
 ## Methodology rules
 
 These are the difference between a benchmark and a screenshot of one run.
@@ -41,7 +49,10 @@ One variable at a time, at 1024² unless stated.
 
 - **Steps:** 4, 10, 20, 28, 40, 50 — establishes the linear region and where quality stops improving
 - **Resolution:** 512², 768², 1024², 1280², 1536² at 28 steps
-- **Aspect ratios:** 1024×1024 vs 1344×768 at equal pixel count — tests whether non-square costs extra
+
+`timings.upload_s` is recorded alongside inference for every run. The worker holds the GPU while uploading, so upload time is on the hot path and belongs in the latency figure rather than outside it.
+
+**Named output: `AVG_JOB_SECONDS`.** The p50 at the default configuration — 1024², 28 steps, on the recommended GPU — is the constant driving the queue-pressure threshold in [02](02-gateway-core.md#queue-pressure). It is currently an estimate ([08](08-production-readiness.md) gap #9), and this sweep is what replaces it. Recorded explicitly as config output, not left to be inferred from a table.
 
 ### 3. GPU comparison
 
@@ -67,6 +78,8 @@ cost = execution_seconds × (hourly_rate / 3600)
 
 Reported per GPU per configuration, plus the honest version that includes idle-timeout billing between requests at a stated request rate. Execution-only cost understates real spend for bursty traffic, and bursty is the normal case.
 
+Storage is added as a separate line: the network volume holding weights, plus generated images accumulating at the published per-GB rate. Small, but it is the only cost that grows without anyone submitting anything — and with no retention policy ([08](08-production-readiness.md) gap #5) it grows indefinitely.
+
 Cross-check the derived figure against RunPod's reported spend for the benchmark run. A model that disagrees with the invoice is wrong.
 
 ### 5. Throughput and concurrency
@@ -76,17 +89,34 @@ Cross-check the derived figure against RunPod's reported spend for the benchmark
 
 Queue wait is the number a user feels and the one a latency figure omits.
 
+### 5b. End-to-end, as the caller sees it
+
+One extra column, from the client that already exists.
+
+Every worker-side figure above excludes the parts a caller actually waits through: queue wait, then **up to one reconciler tick (2s) before we notice completion**, then the image proxy transfer. The demo client already timestamps submit and first-successful-fetch, so the delta is recorded for free.
+
+| Reported | Meaning |
+|---|---|
+| `inference_s` | What the GPU did |
+| `observed_s` | Submit → image in hand |
+| Delta | Everything the system adds around the model |
+
+Worth one row because it is the only latency anyone experiences, and because the reconciler tick is a design parameter — if the delta is dominated by it, that is an argument for a shorter tick or for SSE, decided from data rather than taste.
+
 ### 6. Resource ceilings
 
 - Peak VRAM per configuration via `torch.cuda.max_memory_allocated()`
 - Maximum resolution before OOM, per GPU
-- Response payload size by format and resolution — PNG vs JPEG vs WebP
 
-The payload measurement resolves the open question from [01](01-worker.md): RunPod does not document a response ceiling, so it gets probed at 1536² rather than assumed.
+Response payload size is **no longer a headline measurement**. The worker returns a storage key, so responses are ~200 bytes regardless of resolution, and RunPod's undocumented response ceiling stopped being a risk the moment that decision was made ([01](01-worker.md)).
+
+It is still recorded once, at 1536², for the base64 fallback path — the only configuration where the ceiling could still bite. One number, not a table.
 
 ### 7. Weight delivery: baked versus network volume
 
 Two endpoints, identical worker code, differing only in where weights come from. The headline platform comparison.
+
+**Precondition, run first.** Both endpoints must produce byte-identical output for an identical seed ([07](07-testing.md)). If they do not, the two are running different weights — a volume populated from a different revision, or a stale image — and every row below is comparing two variables at once. **The comparison is void until this passes**, and it is cheap: one generation on each, one hash.
 
 | Measured | Why it matters |
 |---|---|
@@ -99,7 +129,18 @@ Two endpoints, identical worker code, differing only in where weights come from.
 
 The hypothesis: baked wins on availability and steady state, volume wins on scale-up and iteration. Reported as *when each wins*, not as a single verdict — the answer depends on traffic shape, and saying so is more useful than picking a side.
 
-### 8. Quality versus steps
+### 8. Claims made in the specs
+
+Two assertions are load-bearing elsewhere and are asserted rather than measured. Both are cheap to settle in the same run.
+
+| Claim | Made in | Measurement |
+|---|---|---|
+| Real CFG costs ~2× | [01](01-worker.md#why-there-is-no-negative-prompt) — the reason no negative prompt is exposed | Same prompt and seed at `true_cfg_scale` 1.0 and 3.5. If it is not ~2×, the justification needs rewriting |
+| FlashBoot resume beats cold start substantially | [01](01-worker.md) — the reason for the module-level warm-up design | Already falls out of §1; called out here so it is reported as a verdict on the design, not just a number |
+
+A spec that justifies a design decision with an unmeasured number is a spec with a soft spot. These are the two, and this is where they get closed.
+
+### 9. Quality versus steps
 
 A fixed-seed grid across step counts, committed as images.
 
@@ -121,12 +162,15 @@ Not a performance measurement, but it is what makes the performance measurement 
 1. **Summary** — headline numbers, the GPU recommendation, and the weight-delivery recommendation, with reasoning
 2. **Methodology** — the rules above, so the numbers are checkable
 3. **Cold start** — decomposed table, cold vs FlashBoot
-4. **Latency** — the sweeps, with p50/p95
-5. **Cost** — per GPU per configuration, execution-only and with idle
-6. **Ceilings** — VRAM, OOM boundary, payload sizes
-7. **Baked vs network volume** — the platform comparison
-8. **Quality vs steps** — the image grid
-9. **Threats to validity** — below
+4. **Latency** — the sweeps with p50/p95, plus end-to-end as the caller sees it
+5. **Cost** — per GPU per configuration, execution-only, with idle, and storage
+6. **Ceilings** — VRAM and the OOM boundary
+7. **Baked vs network volume** — the platform comparison, with its precondition stated
+8. **Claims verified** — the 2× CFG cost and the FlashBoot benefit
+9. **Quality vs steps** — the image grid
+10. **Threats to validity** — below
+
+Values that feed configuration — `AVG_JOB_SECONDS`, the recommended GPU, the recommended variant — are listed together at the end of the summary, so the report has an actionable output and not only a descriptive one.
 
 ## Threats to validity
 
