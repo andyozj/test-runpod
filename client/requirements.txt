@@ -1,0 +1,3 @@
+# The demo client uses RunPod's official Python SDK.
+#   pip install -r client/requirements.txt
+runpod>=1.7

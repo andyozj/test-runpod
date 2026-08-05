@@ -1,4 +1,4 @@
-"""Create or update a RunPod serverless endpoint from committed config.
+r"""Create or update a RunPod serverless endpoint from committed config.
 
 Targets the REST API at `https://rest.runpod.io/v1`, which is RunPod's current
 management surface. The GraphQL `saveEndpoint` mutation still works but is
@@ -108,7 +108,6 @@ def _parse_simple_yaml(text: str) -> dict[str, Any]:
         The parsed mapping.
     """
     root: dict[str, Any] = {}
-    current_key: str | None = None
     container: Any = None
     container_indent = -1
 
@@ -134,11 +133,11 @@ def _parse_simple_yaml(text: str) -> dict[str, Any]:
         key, value = key.strip(), value.strip()
         if value:
             root[key] = _scalar(value)
-            container, current_key, container_indent = None, None, -1
+            container, container_indent = None, -1
         else:
             container = [] if key in _LIST_KEYS else {}
             root[key] = container
-            current_key, container_indent = key, indent
+            container_indent = indent
     return root
 
 

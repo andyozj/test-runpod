@@ -32,11 +32,17 @@ format-check:
 	done
 
 .PHONY: lint
-lint:
+lint: lint-tools
 	@for p in $(PACKAGES); do \
 		[ -f $$p/pyproject.toml ] || continue; \
 		echo "== lint $$p"; (cd $$p && uv run ruff check .) || exit 1; \
 	done
+
+.PHONY: lint-tools
+lint-tools: ## Lint the CLI tools outside both packages
+	@echo "== lint client/ scripts/"
+	@uvx ruff@0.7.4 format --check client scripts || exit 1
+	@uvx ruff@0.7.4 check client scripts || exit 1
 
 .PHONY: types
 types:

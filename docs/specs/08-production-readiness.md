@@ -22,6 +22,7 @@ An honest account of what this is not. The engineering is production-*shaped*; i
 | Reproducibility | Seed always echoed, model revision pinned in `contracts/`, `model_version` on every result |
 | Brief compliance | Worker returns base64 by default, so `GET /status/{job_id}` alone yields an image. Storage references are opt-in — [01](01-worker.md) |
 | Cancellation | `POST /v1/jobs/{id}/cancel` delegating to RunPod's own cancel — the platform owns the queue, so only it can stop the work and the billing |
+| Platform SDK | The demo client uses `runpod.Endpoint`. The gateway does not: the SDK is synchronous, and calling it from an async request handler would block the event loop, so `adapters/` speaks httpx directly |
 | Deploy safety | Immutable `{version}-{sha}-{variant}` tags, one-input rollback workflow, `latest` never deployed |
 | Secret management | RunPod secrets manager, referenced as `{{ RUNPOD_SECRET_* }}`. No plaintext credential in committed config or image — [06](06-build-deploy.md#secrets) |
 | Config as code | Endpoints declared in `deploy/endpoints/*.yaml`, applied through the REST API as a template upsert then an endpoint upsert. Reviewable in a diff, reconstructible after deletion |

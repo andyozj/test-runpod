@@ -28,11 +28,18 @@ For anything real, submit and poll — that is what the client does, with live
 progress and observed wall time:
 
 ```bash
+pip install -r client/requirements.txt      # RunPod's official SDK
 python client/generate.py "a red fox in falling snow" --out fox.png
 # job 7f3a-...
-#   IN_PROGRESS 43%
+#   IN_QUEUE
+#   IN_PROGRESS
+#   COMPLETED
 # saved fox.png  seed=918273  1024x1024  inference=21.4s  observed=24.8s
 ```
+
+The client uses `runpod.Endpoint` rather than raw HTTP — the SDK owns the
+polling loop, the `{"input": ...}` envelope and the retry semantics, so ~15
+lines replace ~150. The `curl` above remains the zero-dependency path.
 
 ```bash
 # the same thing by hand
@@ -212,7 +219,7 @@ worker/             the serverless worker — the graded deliverable
   src/worker/       handler, pipeline, inference, guardrails, schemas
   scripts/          fetch_weights.py
   Dockerfile
-client/generate.py  submit-and-poll demo client
+client/generate.py  demo client, on RunPod's Python SDK
 gateway/            FastAPI tier (beyond the brief) — see gateway/README.md
 deploy/endpoints/   endpoint configuration as code
 scripts/            apply_endpoint.py
