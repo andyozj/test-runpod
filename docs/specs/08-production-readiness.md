@@ -20,7 +20,8 @@ An honest account of what this is not. The engineering is production-*shaped*; i
 | Progress | Per-step `progress_update` from the worker, stored and served — [01](01-worker.md#progress-reporting) |
 | Queue-depth visibility | `endpoint_health` logged every 2s — a log-based time series of depth and worker counts |
 | Reproducibility | Seed always echoed, model revision pinned in `contracts/`, `model_version` on every result |
-| Credential containment | Storage keys never leave the server; the gateway proxies image bytes |
+| Brief compliance | Worker returns base64 by default, so `GET /status/{job_id}` alone yields an image. Storage references are opt-in — [01](01-worker.md) |
+| Credential containment | With storage enabled, keys never leave the server; the gateway serves image bytes |
 | Deploy safety | Immutable `{version}-{sha}-{variant}` tags, one-input rollback workflow, `latest` never deployed |
 | Secret management | RunPod secrets manager, referenced as `{{ RUNPOD_SECRET_* }}`. No plaintext credential in committed config or image — [06](06-build-deploy.md#secrets) |
 | Config as code | Both endpoints declared in `deploy/endpoints/*.yaml`, applied via `saveEndpoint`. Reviewable in a diff, reconstructible after deletion |
@@ -38,12 +39,12 @@ Ranked by what would hurt first in a real deployment.
 | 2 | **No budget cap or spend alerting** | Cost overrun is discovered on the invoice | Low — RunPod API polling plus a threshold |
 | 3 | **No metrics export** | `endpoint_health` gives a log-based time series, but there is no scrape endpoint, no dashboard, no alerting, no SLOs | Low — `prometheus-client` and a `/metrics` route |
 | 4 | **The endpoint is a second door with one shared key** | The serverless endpoint is callable with the RunPod API key, which is account-scoped, identical for every holder, and can also create and delete resources. Anyone given it bypasses the gateway — no per-caller auth, no idempotency, no attribution — and there is no way to issue a narrower credential | Not closable from our side. Mitigated by key hygiene and by duplicating the guardrail into the worker |
-| 5 | **No retention or deletion for images or prompts** | Images accumulate on the network volume, billed per GB per month; prompts accumulate in `jobs.request`. Both are retained deliberately for audit, but with no expiry and no deletion route a takedown or erasure request cannot be honoured | Medium — lifecycle job plus a deletion route |
+| 5 | **No retention or deletion for images or prompts** | With storage enabled, images accumulate on the network volume, billed per GB per month; prompts accumulate in `jobs.request` regardless. Both are retained deliberately for audit, but with no expiry and no deletion route a takedown or erasure request cannot be honoured | Medium — lifecycle job plus a deletion route |
 | 6 | **No distributed tracing** | The correlation ID is a hand-rolled substitute. No spans, no latency breakdown between queue wait and inference | Medium — OpenTelemetry across both tiers |
 | 7 | **Circuit breaker state is per-process** | Correct for one instance, wrong for a fleet — each replica learns the outage separately | Medium — shared state in Redis |
 | 8 | **No audit trail** | Abuse investigation and takedown rest on raw logs. `flag` verdicts are recorded but nothing consumes them | Medium — append-only audit table and a review queue |
 | 9 | **`AVG_JOB_SECONDS` is a constant** | The queue-wait estimate driving the `429` does not adapt to resolution, step count, or GPU. A 50-step 1536² job is estimated the same as a 20-step 512² one | Low — rolling p50 from completed jobs |
-| 10 | **Gateway proxies image bytes** | Every image traverses the gateway. Fine at this scale; a bandwidth bottleneck at any real one | Low — presigned URLs, one route, no callers affected |
+| 10 | **Base64 default is bandwidth-inefficient** | A 2.7MB payload per result, re-sent on every poll of a completed job, and unusable in any pushed transport. Correct for a directly-callable endpoint, wrong at scale — where `STORAGE_ENABLED` plus presigned URLs is the answer | Low — a settings flag and one route |
 | 11 | **No gateway key rotation** | A leaked gateway key is revoked by editing settings and restarting. The RunPod account key has no rotation story at all | Low — key versioning |
 | 12 | **No load test or capacity model** | Concurrency limits and the queue threshold are reasoned, not measured | Medium — a load harness and a run |
 | 13 | **No image provenance** | Output is not attributable as machine-generated | Medium — C2PA or invisible watermark |

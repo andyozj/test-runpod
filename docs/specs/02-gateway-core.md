@@ -54,8 +54,8 @@ class RequestContext:
 @dataclass(frozen=True)
 class JobResult:
     """What the worker produced, as stored on a completed job."""
-    image_url: str | None
     image_base64: str | None
+    storage_key: str | None
     format: str
     seed: int
     width: int
@@ -185,7 +185,7 @@ API key in `Authorization: Bearer <key>`, verified by middleware ahead of every 
 
 Keys come from settings as a list of `key_id:secret` pairs, hashed once at startup into an in-memory map. No table, no migration — this is a small fixed set of callers, and a database round trip per request buys nothing.
 
-Comparison is constant-time via `hmac.compare_digest`. A naive `==` on a secret leaks length and prefix information through timing, and the correct call is the same length as the wrong one.
+Comparison is constant-time via `hmac.compare_digest`. Because the stored value is a fixed-length digest, the length-leak argument does not apply — the reason is the prefix leak: `==` short-circuits on the first differing byte, so comparison time correlates with how much of a guess is correct, which is enough to walk a digest byte by byte.
 
 The resolved `api_key_id` lands in `RequestContext`, on the job row, and in every log line, which is what makes per-caller attribution and abuse investigation possible at all.
 
@@ -243,6 +243,12 @@ The secondary reason: RunPod API calls would scale with client poll rate rather 
 
 **Concurrent reconcilers do not collide.** `FOR UPDATE SKIP LOCKED` means a second instance takes different rows rather than blocking or duplicating.
 
+**Orphaned jobs are adopted, not spun on.** `submit` inserts the row before calling RunPod, so a crash between the two leaves a `QUEUED` job with `runpod_job_id = None`. Nothing upstream corresponds to it, and a naive reconciler would claim it every tick forever with nothing to poll.
+
+The rule: a claimed job with no `runpod_job_id` is **resubmitted**, not polled. It is safe because no upstream job exists to duplicate — that is precisely what the null means. Jobs older than the deadline are timed out as usual, so a permanently failing resubmit cannot loop indefinitely.
+
+Recording the row first is deliberate: the alternative — submit, then insert — loses the job entirely if the crash lands the other way, and an untracked job still bills.
+
 ### Progress
 
 The worker emits per-step progress via `progress_update` ([01](01-worker.md)), which RunPod returns on the status response while the job is still running. The reconciler stores it on the job so a client polling mid-generation gets a percentage rather than a bare `IN_PROGRESS`.
@@ -293,7 +299,9 @@ capacity        = max(workers.running + workers.idle, 1)
 estimated_wait  = (jobs.inQueue / capacity) * AVG_JOB_SECONDS
 ```
 
-If `estimated_wait > MAX_QUEUE_WAIT_SECONDS` (default 120), `submit` fails with `429 QUEUE_SATURATED` and `Retry-After: ceil(estimated_wait)`.
+If `estimated_wait > MAX_QUEUE_WAIT_SECONDS` (default 120), `submit` fails with `429 QUEUE_SATURATED` and `Retry-After: ceil(estimated_wait * uniform(0.8, 1.2))`.
+
+Two honest caveats about that number. `capacity` counts a *running* worker as available, which it is not until its current job finishes — so the estimate is a lower bound and real waits skew longer. And the jitter is not decoration: without it every shed client returns at the same instant, converting one queue spike into a synchronised second one.
 
 Rejecting on estimated time rather than raw depth means the threshold survives a change to `max_workers`, and it makes `Retry-After` a real number rather than a guess. `AVG_JOB_SECONDS` starts at a stated estimate and is replaced by the measured p50 from [09](09-benchmarks.md).
 

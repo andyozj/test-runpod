@@ -124,8 +124,6 @@ A RunPod GPU Pod has datacenter bandwidth to both HuggingFace and GHCR, and lets
 
 Procedure lives in `RUNBOOK.md`. Summary: provision pod → clone → `docker buildx build` with the HF secret → smoke test locally on the pod → push to GHCR → create endpoint against the tag → terminate the pod.
 
-## CI
-
 ## Deploy and rollback
 
 Deploy: build and push on the Pod → run the deploy workflow with the new tag → `saveEndpoint` updates the endpoint → workers pick it up on next cold start; FlashBoot workers drain naturally.

@@ -108,15 +108,17 @@ Worth one row because it is the only latency anyone experiences, and because the
 - Peak VRAM per configuration via `torch.cuda.max_memory_allocated()`
 - Maximum resolution before OOM, per GPU
 
-Response payload size is **no longer a headline measurement**. The worker returns a storage key, so responses are ~200 bytes regardless of resolution, and RunPod's undocumented response ceiling stopped being a risk the moment that decision was made ([01](01-worker.md)).
+Response payload size **matters again**, because the worker returns base64 by default ([01](01-worker.md)) and RunPod does not document a response ceiling.
 
-It is still recorded once, at 1536², for the base64 fallback path — the only configuration where the ceiling could still bite. One number, not a table.
+Measured at 512², 1024² and 1536², PNG and JPEG. If 1536² PNG exceeds the limit, JPEG becomes the default at high resolutions — a decision this measurement exists to make. With `STORAGE_ENABLED` the question disappears, but that is not the default and so cannot be the answer.
 
 ### 7. Weight delivery: baked versus network volume
 
 Two endpoints, identical worker code, differing only in where weights come from. The headline platform comparison.
 
-**Precondition, run first.** Both endpoints must produce byte-identical output for an identical seed ([07](07-testing.md)). If they do not, the two are running different weights — a volume populated from a different revision, or a stale image — and every row below is comparing two variables at once. **The comparison is void until this passes**, and it is cheap: one generation on each, one hash.
+**Precondition, run first.** Both endpoints must report the same `sha256` over their weight files ([07](07-testing.md)). If they differ, one is running a volume populated from another revision or a stale image, and every row below compares two variables at once. **The comparison is void until this passes.**
+
+Deliberately *not* a pixel comparison. Two invocations land on different physical GPUs, and bf16 kernels and cuDNN algorithm selection are not bit-reproducible across hosts — an image diff would fail for reasons that have nothing to do with weights, and this spec would then discard its headline comparison over a non-problem. The hash is exact, costs no GPU time, and needs no credits.
 
 | Measured | Why it matters |
 |---|---|

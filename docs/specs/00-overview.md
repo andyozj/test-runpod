@@ -65,7 +65,7 @@ But network volumes are one of RunPod's distinguishing features, and ignoring th
 | Image size | ~45GB | ~10GB |
 | Fresh-worker scale-up | Pull 45GB | Pull 10GB, mount weights |
 | Warm worker | Image layer cached, disk → VRAM | Volume read → VRAM |
-| Region | Any datacenter | **Pinned to the volume's datacenter** |
+| Region | Unconstrained with storage off; five-datacenter choice with it on | **Pinned to the volume's datacenter** |
 | Build/push iteration | Slow | Fast |
 | Storage cost | None beyond registry | Per-GB, per-month |
 
@@ -87,7 +87,7 @@ Generation takes ~20-25s. A synchronous HTTP call held open that long fights eve
 
 So `POST /v1/jobs` → `job_id`, `GET /v1/jobs/{id}` → result is the only interface. No synchronous endpoint is provided: it would bound concurrency by held connections rather than GPU capacity, and on a cold worker — 30-60s of pipeline load before 20-25s of generation — it would exceed any deadline safe against load-balancer idle timeouts. The convenience path would be the one most likely to look broken on a first call. `client/generate.py` covers the two-call ergonomics instead.
 
-This also removes a risk from the build: with async as the default the worker uploads to object storage and returns a **reference** rather than inline base64, so RunPod's undocumented response-payload ceiling stops being something we discover the hard way. Base64 remains as the zero-infrastructure fallback.
+Async is the gateway's interface. It does not change what the **worker** returns: RunPod serverless has a fixed surface, `GET /status/{job_id}` returns the handler's output verbatim, and so the worker returns base64 by default ([01](01-worker.md)). Storage references are opt-in, because a key is only resolvable by a caller running the gateway — and the graded tier must not depend on the ungraded one.
 
 ## Sequencing
 
@@ -97,11 +97,12 @@ Phase 2b is the graded deliverable and is **blocked on RunPod credits**, which a
 |---|---|---|---|
 | 0 | Scaffold, both `pyproject.toml`, pre-commit, CI | `make check` green | No |
 | 1 | Worker: schemas, pipeline protocol, inference, handler, guardrail, tests | Suite green, no GPU | No |
+| 1b | **`README.md` and `client/generate.py`, written against the contract** | **A reviewer could run it the moment 2b lands** | No |
 | 2a | `Dockerfile`, `fetch_weights.py`, runbook, benchmark harness | Weight filter verified via `list_repo_files`; harness runs against a fake | No |
 | 2b | **Build both variants on Pod, push, populate volume, deploy two endpoints, smoke test, benchmark** | **Image generated; `BENCHMARKS.md` populated incl. baked-vs-volume** | **Credits** |
 | 3 | Gateway core, adapters, migrations, auth, tests | Coverage gate | No |
-| 4 | Async + sync facades, reconciler, health, compose | E2E against a fake `RunPodClient` | No |
-| 5 | Client demo, README, docs | Complete except measured numbers | Partly |
+| 4 | Async facade, reconciler, health, compose | E2E against a fake `RunPodClient` | No |
+| 5 | Remaining docs, diagrams | Complete except measured numbers | Partly |
 
 Splitting 2a from 2b is what makes the wait productive: it verifies both build-blockers in [06](06-build-deploy.md) with no GPU and no download.
 
@@ -111,12 +112,12 @@ Until 2b runs, `BENCHMARKS.md` does not exist and no figure anywhere is stated a
 
 | Risk | Mitigation |
 |---|---|
-| **RunPod credits pending — materialised, not hypothetical** | Phases 0, 1, 2a, 3, 4 proceed locally; 2b reduced to execution |
+| **RunPod credits pending — materialised, not hypothetical** | Phases 0, 1, 1b, 2a proceed locally. **Cutoff: if no reply by end of 2026-08-05, self-fund ~$20 and proceed.** A $20 dependency must not be allowed to fail the only graded deliverable |
 | HF licence gate blocks even the offline weight-filter check | Accept immediately; instant and independent of the credits reply |
 | Gateway consumes time the graded deliverable needs | 2a completes before Phase 3 starts |
 | ~45GB image push is slow and failure-prone | Build and push from the Pod; GHCR avoids Docker Hub pull limits |
 | L40S unavailable in region | GPU fallback list; benchmark A100 80GB regardless |
-| **Volume variant pins the endpoint to one datacenter**, narrowing the GPU pool | Baked variant is the primary deliverable and has no region constraint; the volume endpoint is the comparison, not the fallback |
+| **Both variants are region-constrained**, narrowing the GPU pool | The volume pins its endpoint; the S3 image storage exists in only five datacenters, so the baked variant is constrained too if storage is enabled. With storage off by default the baked variant is unconstrained — which is another reason it is the default |
 | Volume variant doubles the 2b deploy work | Worker code is identical; only the weight path differs. If time runs short, the baked variant alone still satisfies the brief |
 | `diffusers` API drift | Pin exact versions; `uv.lock` committed |
 

@@ -82,8 +82,8 @@ Completed:
   "status": "COMPLETED",
   "progress": {"step": 28, "total": 28, "percent": 100},
   "result": {
-    "image_url": "https://.../8f3a2c.png",
-    "image_base64": null,
+    "image_base64": "iVBORw0KGgoAAAANS...",
+    "image_url": null,
     "format": "png",
     "seed": 918273,
     "width": 1024, "height": 1024,
@@ -119,11 +119,11 @@ Poll guidance, published in the API docs: **every 2s**, backing off to 5s after 
 
 ### `GET /v1/jobs/{id}/image`
 
-Streams the generated image, resolving the worker's storage key with server-side credentials.
+Streams the generated image. `200` with the bytes and the correct `Content-Type`; `404` if the job is unknown or has no result yet.
 
-`200` with the image bytes and the correct `Content-Type`; `404` if the job is unknown or has no result yet.
+Serves whichever form the result carries: decoding `image_base64`, or resolving `storage_key` against storage with server-side credentials when storage is enabled ([01](01-worker.md#storage-opt-in-not-default)).
 
-This route exists because the storage backend is authenticated ([06](06-build-deploy.md#image-storage)). Handing a caller a raw S3 URL would hand them something they cannot open, and handing them credentials to fix that would be worse. The job response therefore carries a short reference — preserving everything in *Why the result shape decides which facades are possible* below — and this route turns it into bytes.
+The route exists so a caller has one stable way to obtain an image regardless of which the worker produced, and so that an authenticated S3 URL is never handed to a client who cannot open it. When storage is on, `image_url` on the result points here.
 
 ### `GET /health`, `GET /health/detailed`
 
@@ -185,11 +185,13 @@ The protocol boundary in [02](02-gateway-core.md) makes each an addition rather 
 
 ## Why the result shape decides which facades are possible
 
-The worker returns a storage **reference**, not image bytes ([01](01-worker.md)). That single choice is what keeps the table above open.
+A ~200-byte reference can be pushed: it fits in an SSE event, a webhook body, a WebSocket frame, an MCP tool result. A 2.7MB base64 blob fits in none of them comfortably, and a client polling every 2s would re-download it on every call until the job finished.
 
-A ~200-byte result can be pushed: it fits in an SSE event, a webhook body, a WebSocket frame, an MCP tool result. A 2.7MB base64 blob fits in none of them comfortably, and a client polling every 2s would re-download it on every call until the job finished.
+So the decision about which transports are *available* is made in the worker's serialisation, in the place least visible to whoever later wants to add streaming.
 
-So the decision about which transports are *available* is made in the worker's serialisation, not in the API layer — and it is made once, early, in the place least visible to whoever later wants to add streaming. Returning bytes would foreclose event-driven delivery entirely while looking like a local choice about response encoding.
+**The worker nevertheless returns base64 by default**, because RunPod serverless has a fixed route surface and `GET /status/{job_id}` returns the handler's output verbatim ([01](01-worker.md)). A storage key there would hand a direct caller something unresolvable, and the graded tier cannot depend on the ungraded one being run.
+
+Setting `STORAGE_ENABLED` switches to references and unlocks the table above. That is the correct default for a deployment with the gateway in front of it, and the wrong one for an endpoint a reviewer calls directly — so it is configuration, not architecture.
 
 ## Why the boundary makes this cheap
 

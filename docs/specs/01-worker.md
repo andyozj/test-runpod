@@ -90,36 +90,34 @@ Snapping is silent by design, unlike prompt truncation: the difference between 1
 
 ```json
 {
-  "image_url": "https://.../8f3a2c.png",
-  "image_base64": null,
+  "image_base64": "iVBORw0KGgoAAAANS...",
+  "storage_key": null,
   "format": "png",
   "seed": 42,
   "width": 1024, "height": 1024,
   "num_inference_steps": 28, "guidance_scale": 3.5,
   "model_version": "black-forest-labs/FLUX.1-dev@<revision>",
-  "timings": {"inference_s": 21.4, "upload_s": 0.4}
+  "timings": {"inference_s": 21.4, "encode_s": 0.3}
 }
 ```
 
-**A storage reference is the default, and the reason is architectural rather than about payload size.**
+**Base64 is the default, and the platform decides it.**
 
-A ~200-byte result can be *pushed*. A 2.7MB base64 blob cannot — it is unusable in an SSE event, hostile in a webhook body, and wasteful in a polling response that a client may fetch several times before the job finishes. Returning a reference is what keeps every event-driven facade in [03](03-facades.md) available; returning base64 forecloses all of them at the point the worker serialises its result, which is the worst place to make that decision.
+RunPod serverless exposes a fixed surface — `/run`, `/status/{job_id}`, `/stream`, `/cancel`, `/health`. Custom routes cannot be added. So `GET /status/{job_id}` returns **the handler's return value verbatim**, and there is nowhere else a caller can obtain a result from.
 
-It also decouples result *delivery* from result *notification*. The URL can be handed to a browser, a CDN, or another service without the gateway proxying image bytes it has no reason to touch.
+That makes the rule simple: whatever the handler does not put in its output does not exist as far as a direct caller is concerned. A storage key in the output hands the reviewer a key they cannot resolve, because resolving it requires storage credentials or a gateway they are not running. The brief asks the endpoint to *return a generated image*; only base64 satisfies that unconditionally.
 
-Exactly one of `image_url` and `image_base64` is populated. Base64 remains as the zero-infrastructure fallback for a local run with no bucket configured, which keeps the worker demonstrable in isolation.
+At 1024² PNG this is ~2MB, ~2.7MB encoded. Measured against the response ceiling in [09](09-benchmarks.md) at 1536², with JPEG as the fallback if it binds.
 
-### Storage backend
+### Storage: opt-in, not default
 
-RunPod network volume via its S3-compatible API ([06](06-build-deploy.md#image-storage)). One platform, no extra vendor, no cross-cloud egress, and it shares infrastructure with the volume weights variant.
+When `STORAGE_ENABLED` is set, the worker additionally uploads to a RunPod network volume via its S3-compatible API and populates `storage_key`. `image_base64` is then omitted, since the caller has a reference and a 2.7MB duplicate helps nobody.
 
-**The worker returns a storage key, not a public URL.** The RunPod S3 endpoint is authenticated, so a raw URL would be unopenable by any client that does not hold storage credentials. The gateway resolves the key through `GET /v1/jobs/{id}/image` using server-side credentials, so callers get a usable URL and no secret ever leaves the server.
+This exists because a ~200-byte result can be *pushed* and a 2.7MB blob cannot — it is unusable in an SSE event, hostile in a webhook body, and wasteful in a polling response fetched repeatedly. Keeping the capability preserves every event-driven facade in [03](03-facades.md) as a real option.
 
-`image_url` in the response above is that gateway route, assembled from the key. The field name reflects what the caller receives.
+But it is **off by default**, because it only works for a caller who can resolve the key: the gateway, using server-side credentials, via `GET /v1/jobs/{id}/image`. A direct caller cannot. Making the graded path depend on the ungraded tier was the wrong trade, and the default now reflects that.
 
-`storage.py` speaks S3 through a narrow interface, so Cloudflare R2 or AWS S3 is a settings change: bucket, endpoint, credentials.
-
-Objects are written under a content-addressed key and treated as ephemeral. Retention policy is out of scope and recorded in [08](08-production-readiness.md).
+`storage.py` speaks S3 through a narrow interface, so Cloudflare R2 or AWS S3 is a settings change: bucket, endpoint, credentials. Objects are content-addressed and ephemeral; retention is recorded in [08](08-production-readiness.md).
 
 `model_version` pins the output to what produced it, including the resolved revision. Without it, an image cannot be correlated to a model version after the fact. The revision is pinned at build time by `fetch_weights.py` and baked in, so it is a fact rather than a label.
 
