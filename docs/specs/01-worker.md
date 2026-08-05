@@ -174,13 +174,19 @@ It also changes what the downstream facades are worth. A stream carrying one com
 
 Progress is throttled to every 10 percentage points (first and final step always report), because the SDK's `progress_update` spawns a thread, an event loop, and a TLS session per call — per-step reporting costs 28 of each per image for granularity no polling client can observe. The callback itself runs between steps on the GPU thread, so the decision to skip must stay trivial, and it is: one integer comparison.
 
-### Not built: preview images
+### Not built yet: preview images — designed, deferred to post-deploy
 
-The `/stream/{job_id}` endpoint plus a generator handler could yield intermediate images — VAE-decode the latents every few steps into a small JPEG, giving progressive previews.
+The `/stream/{job_id}` endpoint plus a generator handler could yield intermediate images — the Midjourney-style progressive reveal. It is the first post-deploy stretch item, and the design is settled so building it is execution:
 
-It is not built because of a structural obstacle rather than a lack of appetite. `pipe(...)` is a blocking call and `callback_on_step_end` fires inside it, so **a generator handler cannot yield from the callback**. Real streaming needs the pipeline running on a thread with the callback pushing to a queue that the generator drains — plus a VAE decode costing ~50-150ms per preview on the same GPU doing the work.
+The structural obstacle: `pipe(...)` is a blocking call and `callback_on_step_end` fires inside it, so **a generator handler cannot yield from the callback** — `yield` is bound to the generator's own frame. The known fix is three pieces:
 
-`progress_update` has no such constraint: it is an ordinary call, invocable from anywhere, which is why it is the version that ships.
+1. **Pipeline on a worker thread**; the callback `put`s events into a `queue.Queue`; the now-unblocked generator drains it and yields. The thread runner belongs in `inference.py` — the handler stays a thin generator. Sentinel for completion, cross-thread exception propagation, cancellation handling.
+2. **`taef1` for intermediate decodes, never the real VAE.** The tiny distilled autoencoder for FLUX (~5MB, ~200MB VRAM) decodes a preview in ~1-3ms versus 50-150ms — 28 previews cost <0.5% of a 20s job instead of ~5-10%. The final image still uses the real VAE. Pin its revision like every other weight.
+3. **`return_aggregate_stream=True`** in `runpod.serverless.start`, so `/run` + `/status` behave exactly as today and `/stream` is additive.
+
+Parameters when built: `"preview": true` input flag defaulting to off so the cost stays opt-in; previews every ~4th step starting near 40% (earlier latents decode to noise regardless of decoder); ~256px JPEG ~20KB per event. Client side is `for event in endpoint.stream(job)`.
+
+`progress_update` has no such constraint — an ordinary call, invocable from anywhere — which is why it is the version that ships first, and why the stream carries previews rather than duplicating percentages.
 
 ## Weight path
 
