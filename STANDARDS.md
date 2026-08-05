@@ -41,7 +41,16 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "D", "T20"]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "C4", "SIM",  # style, bugs, imports
+    "D",        # pydocstyle — see §10
+    "T20",      # no print — see below
+    "S",        # bandit — see §11
+    "C90",      # cyclomatic complexity — see §6
+    "PLR0913",  # too many arguments
+    "PLR0915",  # too many statements
+    "PLR2004",  # magic value comparison
+]
 ignore = [
     "E501",  # line length — the formatter owns this
     "D107",  # __init__ — Google convention documents Args in the class docstring
@@ -49,7 +58,18 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"tests/**" = ["D"]
+"tests/**" = [
+    "D",        # test names carry the intent; an Args block on a test is noise
+    "S101",     # assert is the point of a test
+    "PLR2004",  # literal expected values are clearer than named constants here
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-statements = 50
 
 [tool.ruff.lint.isort]
 known-first-party = ["worker"]   # "gateway" in the gateway package
@@ -57,6 +77,8 @@ known-first-party = ["worker"]   # "gateway" in the gateway package
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 ```
+
+The `mccabe` and `pylint` limits are the §6 thresholds made executable. They are configuration, not aspiration — a function over 50 statements or 5 parameters fails the build.
 
 ### mypy
 
@@ -75,6 +97,8 @@ ignore_missing_imports = true
 `strict = true` from the first commit. Retrofitting strictness onto a finished codebase does not happen.
 
 `T20` bans `print`. In a serverless worker, stdout *is* the observability channel (§8) — an unstructured `print` is a log line that no query will ever find.
+
+`S` (bandit) enforces §11 by tooling rather than by review — hardcoded credentials, unsafe subprocess use, weak hashing. `S101` is exempted in tests, where `assert` is the mechanism rather than a smell.
 
 The `ignore_missing_imports` overrides are a deliberate, contained leak: `diffusers`, `runpod`, and `transformers` are not usefully typed, so everything from them arrives as `Any`, and under `strict` that surfaces as `warn_return_any` errors the moment such a value crosses a function boundary. The fix is a local `Protocol` wrapping the third-party surface actually used — not `type: ignore` at the call sites. This is why §4's rule against unjustified `Any` holds even though these three modules are exempted from import checking.
 
@@ -97,7 +121,25 @@ api/  adapters/  workers/     ← may import core/
       core/                   ← imports nothing from the outer rings
 ```
 
-`gateway/src/gateway/core/` must not import FastAPI, psycopg, or httpx. It defines `Protocol` interfaces; `adapters/` implements them. This is what makes an additional transport facade a small change rather than a rewrite, and it is the single structural rule most worth enforcing in review.
+`gateway/src/gateway/core/` must not import FastAPI, psycopg, or httpx. It defines `Protocol` interfaces; `adapters/` implements them. This is what makes an additional transport facade a small change rather than a rewrite.
+
+It is enforced by `import-linter`, not by review. A stray `from fastapi import HTTPException` in `core/service.py` passes ruff, mypy, and every test while quietly welding the domain logic to one transport — the cost surfaces only when the second facade turns out to be a rewrite.
+
+```toml
+[tool.importlinter]
+root_package = "gateway"
+
+[[tool.importlinter.contracts]]
+name = "core depends on nothing outward"
+type = "forbidden"
+source_modules = ["gateway.core"]
+forbidden_modules = [
+    "gateway.api", "gateway.adapters", "gateway.workers",
+    "fastapi", "httpx", "psycopg", "sqlalchemy",
+]
+```
+
+`lint-imports` runs as part of `make check` (§12).
 
 ## 4. Types
 
@@ -122,14 +164,17 @@ Configuration is `pydantic-settings`, loaded once, injected. No `os.getenv` outs
 
 ## 6. Complexity
 
-| Metric | Limit |
-|---|---|
-| Function length | 15–20 lines target, 50 hard |
-| Parameters | 5 |
-| Branches | 12 |
-| Module length | ~200 lines soft |
+| Metric | Limit | Enforced by |
+|---|---|---|
+| Function length | 15–20 lines target, 50 hard | `PLR0915` (`max-statements = 50`) |
+| Parameters | 5 | `PLR0913` (`max-args = 5`) |
+| Cyclomatic complexity | 12 | `C901` (`max-complexity = 12`) |
+| Magic numbers | none | `PLR2004` |
+| Module length | ~200 lines soft | Review |
 
 Early returns over nested conditionals. Named constants over magic numbers. Dict lookup over `if`/`elif` chains. No mutable default arguments.
+
+Only the module-length guideline is review-enforced; the rest fail the build.
 
 ## 7. Error handling
 
@@ -169,7 +214,15 @@ The correlation ID originates at the gateway (`X-Correlation-ID` header or gener
 Log: request completion with duration, state transitions, errors with context, resource metrics.
 Never log: tokens, API keys, credentials, connection strings. `HF_TOKEN` and `RUNPOD_API_KEY` must never appear in output.
 
-Prompts are user content. Log a length and a hash, not the text.
+Prompts are user content, but this is an image-generation service: a bug report about a bad image is unanswerable if the prompt was never recorded. Log the first 80 characters plus the full length — enough to reproduce and triage, short enough that a long prompt cannot smuggle a wall of personal data into the log store.
+
+```python
+logger.info(
+    "generation_started",
+    prompt_preview=prompt[:80],
+    prompt_length=len(prompt),
+)
+```
 
 ### Serverless constraint
 
@@ -185,9 +238,11 @@ Naming: `test_<unit>_<scenario>_<expected_result>`. Arrange-Act-Assert. `pytest.
 
 ### The GPU rule
 
-**No test in `tests/unit/` or `tests/integration/` may require a GPU, network access, or model weights.** CI has none of the three.
+**No test in `tests/unit/` or `tests/integration/` may require a GPU, model weights, or a call to an external network service.** CI has none of the three.
 
-This is a design constraint, not a testing preference: it forces the pipeline behind a lazily-initialised, injectable accessor rather than a module-level global. A `handler.py` that cannot be imported on a laptop is a `handler.py` that cannot be tested, and the fix is architectural.
+"External network" is the operative word. Integration tests may start local containers — Postgres via testcontainers is expected — because that is a local dependency CI can provide. What they may not do is reach HuggingFace, the RunPod API, or any other third party: those make the suite slow, flaky, and dependent on someone else's uptime and on credentials CI should not hold.
+
+The GPU half is a design constraint, not a testing preference: it forces the pipeline behind a lazily-initialised, injectable accessor rather than a module-level global. A `handler.py` that cannot be imported on a laptop is a `handler.py` that cannot be tested, and the fix is architectural.
 
 GPU-dependent checks live in `tests/e2e/`, marked `@pytest.mark.gpu`, deselected by default, run manually against a live endpoint.
 
@@ -196,6 +251,14 @@ GPU-dependent checks live in `tests/e2e/`, marked `@pytest.mark.gpu`, deselected
 addopts = "-m 'not gpu' --strict-markers"
 markers = ["gpu: requires a live GPU or deployed endpoint"]
 ```
+
+Doctests are a separate invocation, scoped to the modules where examples are required (§10):
+
+```
+uv run pytest --doctest-modules src/gateway/core src/gateway/schemas.py
+```
+
+Scoping matters — `--doctest-modules` across the whole package would import GPU-touching modules at collection time and break the rule above.
 
 ## 10. Documentation
 
@@ -223,10 +286,28 @@ def generate(request: GenerationRequest, pipeline: FluxPipeline) -> GenerationRe
     Raises:
         torch.cuda.OutOfMemoryError: VRAM exhausted. The caller is responsible
             for clearing the cache and requesting a worker refresh.
+    """
+```
+
+No `Example` here: `generate` needs a GPU-resident pipeline, so any `>>>` block would be a doctest that can never run. A function whose dependencies cannot be constructed in a docstring gets prose in the extended description instead.
+
+Where an example *can* run, it is a real doctest and is executed:
+
+```python
+def snap_to_multiple(value: int, multiple: int = 16) -> int:
+    """Round a dimension down to the nearest multiple.
+
+    Args:
+        value: The requested dimension in pixels.
+        multiple: The required factor. FLUX latents are 16x downsampled.
+
+    Returns:
+        The largest multiple of `multiple` not exceeding `value`.
 
     Example:
-        >>> result = generate(GenerationRequest(prompt="a red fox"), pipeline)
-        >>> result.width
+        >>> snap_to_multiple(1000)
+        992
+        >>> snap_to_multiple(1024)
         1024
     """
 ```
@@ -235,8 +316,9 @@ Rules:
 
 - Summary line is one sentence, imperative mood, ends with a period (`D401`, `D415`).
 - Document every parameter. `D417` is enabled and will fail the build on an omission.
-- `Example` is required on anything a consumer calls directly — API schemas, `core/` interfaces, the handler contract. It is optional on internal helpers.
 - Omit a section only when it does not apply. A function returning `None` has no `Returns`.
+- **`Example` is required only where it is genuinely runnable** — pure functions, schema construction, and validation. It is forbidden where it would be a doctest that cannot execute. An example that never runs is documentation that silently rots.
+- Doctests are executed via `--doctest-modules` over `core/` and `schemas.py`. If it is written as `>>>`, it is verified.
 - Optionally enable ruff's `DOC` rules (`DOC201` missing `Returns`, `DOC501` missing `Raises`) for machine-enforced completeness. They are preview-gated, so treat them as advisory until stable.
 
 ### Other
@@ -274,7 +356,9 @@ which runs, for each package independently — there is no root virtualenv, so t
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy src/
+uv run lint-imports              # gateway only — see §3
 uv run pytest --cov=src --cov-fail-under=80
+uv run pytest --doctest-modules <scoped paths>   # see §9
 ```
 
 Plus: docs updated in the same commit, no new `Any` without justification, no secret in the diff.
