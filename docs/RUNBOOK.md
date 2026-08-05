@@ -43,16 +43,28 @@ Update this table on every deploy. **A rollback procedure that begins with "work
    ```
 
 4. **Smoke test on the Pod before pushing.** Catching a broken image here costs minutes; catching it after a push costs an hour.
+
+   The image ships `test_input.json`, so running the container with no
+   arguments executes one real job through the same `handler` the endpoint
+   will call — validation, guardrail, generation, encoding. A far stronger
+   signal than merely loading the pipeline.
+
    ```bash
    # volume variant, against the populated volume
    docker run --rm --gpus all -v /runpod-volume:/runpod-volume \
-     -e WEIGHTS_PATH=/runpod-volume/flux $IMAGE:$TAG-volume \
-     python -c "from worker.pipeline import get_pipeline; get_pipeline(); print('pipeline ok')"
+     -e WEIGHTS_PATH=/runpod-volume/flux $IMAGE:$TAG-volume
 
    # baked variant
-   docker run --rm --gpus all -e WEIGHTS_PATH=/opt/weights $IMAGE:$TAG-baked \
-     python -c "from worker.pipeline import get_pipeline; get_pipeline(); print('pipeline ok')"
+   docker run --rm --gpus all $IMAGE:$TAG-baked
    ```
+
+   Expect a `pipeline_loaded` line, then a result carrying `image_base64`,
+   `seed: 42` and timings. The fixture uses 4 steps and JPEG so it finishes in
+   seconds — it proves the path works, not that the output is beautiful.
+
+   A failure here is almost always one of: weights absent from `WEIGHTS_PATH`,
+   the volume not mounted, or a torch/CUDA mismatch. All three are cheap to fix
+   on the Pod and expensive to discover on a live endpoint.
 
 5. **Push.** Volume first — it unblocks the deploy.
    ```bash
