@@ -91,6 +91,21 @@ Rollback: repoint the endpoint at the previous tag. This works only because tags
 
 The prior known-good tag is recorded in the runbook at each deploy. A rollback procedure that begins with "work out which tag was good" is not a rollback procedure.
 
+## Gateway deployment
+
+The gateway runs **locally via `docker compose`**. It is not hosted.
+
+```bash
+cp .env.example .env          # RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID, GATEWAY_API_KEY
+docker compose up             # gateway + postgres; migrations run on boot
+```
+
+The graded artefact — the RunPod endpoint — is a public URL and callable regardless, so hosting the gateway adds nothing to what can be demonstrated. It would add a live liability: a credential-backed GPU spender exposed continuously, on free credits, with no per-key quota. Rate limiting is the top item in [08](08-production-readiness.md); hosting this publicly before building it would be putting the exposure ahead of the control.
+
+Compose must work on a clean clone with two environment variables and one command. A local setup that needs a README paragraph of troubleshooting is worse than no local setup.
+
+The production path is documented rather than performed: container image, managed Postgres, secrets from the platform's store, the reconciler as a separate process so gateway replicas do not each poll, and the shared circuit-breaker state that becomes necessary the moment there is more than one replica.
+
 ## Configuration
 
 Runtime configuration reaches the endpoint through RunPod's environment settings, never baked into the image: `RUNPOD_API_KEY` is not needed by the worker, but bucket credentials, guardrail settings, and log level are.

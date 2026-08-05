@@ -48,6 +48,7 @@ What is actually handed over:
 | Build host | RunPod GPU Pod |
 | Registry | GHCR |
 | Tiers | Serverless worker (graded) + FastAPI gateway (beyond the brief) |
+| Gateway hosting | **Local via `docker compose`.** Deployment path documented, not performed |
 | Primary facade | **Async** — submit, poll |
 | Also built | Sync wrapper (demo-grade), API-key auth, retry + circuit breaker, health endpoints, prompt guardrails |
 | Documented only | Webhook-out, SSE, WebSocket, MCP, rate limiting, metrics export |
