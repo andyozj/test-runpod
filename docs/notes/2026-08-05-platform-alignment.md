@@ -41,6 +41,29 @@ VRAM, gateway status row).
 - Reconciler/polling note (02 owns it): async results are retained **30 min** after completion,
   sync **1 min** — the reconciler must observe terminal states within that window.
 
+## 06 / runbook — torch wheel is cu130
+
+`uv.lock` resolves torch 2.13.0+cu130 (CUDA 13 wheels, bundled libs — the 12.4 base image is
+irrelevant to this). cu13 needs host driver r580+. Either set the endpoint's Allowed CUDA
+Versions filter to 13.x, or pin torch to a cu12x wheel via a pytorch index in uv config.
+Verify on the Pod before deploying; record the choice in the runbook.
+
+## 06 — cached-models variant needs no code
+
+Pinned revision ⇒ static snapshot path. Endpoint env for the cached variant:
+`WEIGHTS_PATH=/runpod-volume/huggingface-cache/hub/models--black-forest-labs--FLUX.1-dev/snapshots/<sha from contracts/model-revision.txt>`
+plus Model field = black-forest-labs/FLUX.1-dev + HF token (gated). Optionally set
+`HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` on all endpoints — the docs' belt-and-braces
+against silent runtime downloads; the worker already uses local_files_only=True.
+
+## 00 or 06 — one line on Runpod Flash, considered and rejected
+
+Flash (docs.runpod.io/flash) is the no-Docker path: `@Endpoint`-decorated local Python, uploaded
+as a deployment package capped at 1.5GB. Rejected here because the brief explicitly grades
+`handler.py` + a Docker image containing the model — Flash has neither — and its package cap
+cannot carry weights anyway (its own docs say use network volumes). The cap does not apply to
+docker-registry serverless endpoints. Worth stating so a reviewer sees the road not taken.
+
 ## worker code — build blockers: FIXED 2026-08-05 evening, do not redo
 
 All four fixed in the working tree (Dockerfile COPY paths, `fetch_weights.py` upward search +

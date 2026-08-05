@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
-_CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "error-codes.json"
+from worker.contracts import contract_path
 
 
 class ErrorCode(StrEnum):
@@ -38,7 +37,7 @@ def contract_codes() -> set[str]:
     Returns:
         Every code name listed in `contracts/error-codes.json`.
     """
-    data = json.loads(_CONTRACT.read_text())
+    data = json.loads(contract_path("error-codes.json").read_text())
     codes: list[str] = data["codes"]
     return set(codes)
 

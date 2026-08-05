@@ -14,7 +14,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-_CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "blocklist.json"
+from worker.contracts import contract_path
+
+_CONTRACT = contract_path("blocklist.json")
 
 Action = Literal["allow", "flag", "block"]
 

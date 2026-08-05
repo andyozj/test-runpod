@@ -12,10 +12,16 @@
 #   docker buildx build --build-arg BAKE_WEIGHTS=false \
 #     -t ghcr.io/OWNER/flux-worker:0.1.0-SHA-volume .
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM ubuntu:22.04
 
-# runtime, not devel: the devel image adds several GB of compiler toolchain
-# that nothing at inference time uses.
+# Not nvidia/cuda: the torch wheel bundles its own CUDA libraries (that is
+# what +cu130 means) and the driver arrives from the host via the container
+# runtime, so the ~6.6GB CUDA runtime base duplicates libraries nothing loads.
+# The two ENV lines below are what the nvidia base otherwise provided — they
+# tell the runtime to inject the GPU and driver into the container.
+
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
