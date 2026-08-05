@@ -27,9 +27,11 @@ When rules conflict, higher wins:
 | Types | `mypy` | Yes |
 | Tests | `pytest` | Yes |
 | Pre-commit | `pre-commit` | Yes — every package |
-| Python | 3.11 | Yes — matches `target-version`, and is the last version with clean `torch`/`diffusers` wheel coverage at time of writing |
+| Python | 3.11 | Yes — pinned for parity between the CUDA base image and the team `target-version`. Verify wheel availability for the pinned `torch`/`diffusers` before changing it |
 
-Each package owns its `pyproject.toml`. There is no shared dependency set: the worker must never depend on FastAPI or psycopg, and the gateway must never depend on `torch`. A cross-package import is a build failure, not a code smell.
+Each package owns its `pyproject.toml`. There is no shared dependency set: the worker must never depend on FastAPI or psycopg, and the gateway must never depend on `torch`.
+
+This is enforced by construction, not by convention — the two packages resolve into separate virtualenvs, so a cross-package import fails at collection time rather than passing review and breaking in the image. Do not add a root-level shared dependency group; it would silently remove the enforcement.
 
 ### Ruff
 
@@ -39,7 +41,7 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "D"]
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "D", "T20"]
 ignore = [
     "E501",  # line length — the formatter owns this
     "D107",  # __init__ — Google convention documents Args in the class docstring
@@ -71,6 +73,10 @@ ignore_missing_imports = true
 ```
 
 `strict = true` from the first commit. Retrofitting strictness onto a finished codebase does not happen.
+
+`T20` bans `print`. In a serverless worker, stdout *is* the observability channel (§8) — an unstructured `print` is a log line that no query will ever find.
+
+The `ignore_missing_imports` overrides are a deliberate, contained leak: `diffusers`, `runpod`, and `transformers` are not usefully typed, so everything from them arrives as `Any`, and under `strict` that surfaces as `warn_return_any` errors the moment such a value crosses a function boundary. The fix is a local `Protocol` wrapping the third-party surface actually used — not `type: ignore` at the call sites. This is why §4's rule against unjustified `Any` holds even though these three modules are exempted from import checking.
 
 ## 3. Repository structure
 
@@ -259,13 +265,21 @@ Every latency, throughput, cost, and size figure in any document is either **mea
 A change is complete when all of the following pass. This is also the CI gate.
 
 ```
+make check
+```
+
+which runs, for each package independently — there is no root virtualenv, so these cannot be run from the repo root:
+
+```
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy src/
-uv run pytest --cov --cov-fail-under=80
+uv run pytest --cov=src --cov-fail-under=80
 ```
 
 Plus: docs updated in the same commit, no new `Any` without justification, no secret in the diff.
+
+`--cov-fail-under=80` measures the whole package, which is stricter than the "80% of new code" in §9 and equivalent to it in a new repository. Keep the whole-package gate; if it ever becomes the binding constraint, that is a signal about the untested code already there, not a reason to relax it. The 100% requirement on validation and the error-code contract is enforced in review, not by the tool.
 
 CI runs lint, types, and non-GPU tests only. It does not build the worker image — a ~45GB build exceeds the ~14GB disk on standard GitHub runners. Image builds happen on a RunPod GPU pod; the runbook documents the procedure.
 
