@@ -20,18 +20,22 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    UV_SYSTEM_PYTHON=1 \
     HF_HUB_DISABLE_TELEMETRY=1
 
-# No python3-pip: it depends on python3.10, and with two interpreters present
-# uv can install into one while CMD runs the other. One interpreter only,
-# and every uv call below targets it explicitly.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# No apt Python at all. Ubuntu 22.04's python3.11 package is frozen at
+# 3.11.0rc1, which predates sys.get_int_max_str_digits and crashes
+# torch._dynamo on import. uv installs a current standalone CPython, and the
+# venv on PATH is the only interpreter in the image — nothing to mis-target.
+ENV UV_PYTHON_INSTALL_DIR=/opt/python
+RUN uv python install 3.11 && uv venv /opt/venv --python 3.11
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app
 
@@ -39,11 +43,12 @@ WORKDIR /app
 # this layer. Build context is the repo root (`make build-*` passes
 # `-f worker/Dockerfile .`), so paths are repo-relative.
 # The lock is exported rather than hand-listing ranges: the image runs what
-# `uv.lock` pins, or the build fails.
+# `uv.lock` pins, or the build fails. The trailing import is the proof — a
+# broken interpreter/deps combination fails the build here, not the endpoint.
 COPY worker/pyproject.toml worker/uv.lock ./
 RUN uv export --frozen --extra gpu --no-dev --no-emit-project \
         -o /tmp/requirements.txt \
-    && uv pip install --python /usr/bin/python3.11 --no-cache \
+    && uv pip install --python /opt/venv/bin/python --no-cache \
         -r /tmp/requirements.txt \
     && python -c "import torch, diffusers, transformers, runpod"
 
