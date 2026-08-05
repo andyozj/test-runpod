@@ -269,7 +269,7 @@ Without it, a job RunPod has lost stays unresolved forever: polled every tick, n
 deadline = created_at + JOB_TIMEOUT_SECONDS   # default 600
 ```
 
-600s is deliberately well above RunPod's 300s execution timeout ([01](01-worker.md)) plus plausible queue wait. **The gateway deadline must always exceed the endpoint execution timeout** — set below it and we would time out jobs that are still running normally, then discard their results when they complete.
+600s sits inside RunPod's **30-minute result retention** for `/run` jobs — a job resolved later than that would find nothing left to fetch — and well above the 300s execution timeout ([01](01-worker.md)) plus plausible queue wait. **The gateway deadline must always exceed the endpoint execution timeout** — set below it and we would time out jobs that are still running normally, then discard their results when they complete.
 
 ### Where it runs
 

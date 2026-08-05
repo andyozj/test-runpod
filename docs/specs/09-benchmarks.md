@@ -108,7 +108,7 @@ Worth one row because it is the only latency anyone experiences, and because the
 - Peak VRAM per configuration via `torch.cuda.max_memory_allocated()`
 - Maximum resolution before OOM, per GPU
 
-Response payload size **matters again**, because the worker returns base64 by default ([01](01-worker.md)) and RunPod does not document a response ceiling.
+Response payload size **matters again**, because the worker returns base64 by default ([01](01-worker.md)). Request caps are documented — 10MB for `/run`, 20MB for `/runsync` — but no ceiling is published for the `/status` response, which is the one carrying the image.
 
 Measured at 512², 1024² and 1536², PNG and JPEG. If 1536² PNG exceeds the limit, JPEG becomes the default at high resolutions — a decision this measurement exists to make. With `STORAGE_ENABLED` the question disappears, but that is not the default and so cannot be the answer.
 
@@ -125,13 +125,14 @@ Deliberately *not* a pixel comparison. Two invocations land on different physica
 | Measured | Why it matters |
 |---|---|
 | Image size and push duration | Iteration speed during development, and the practical cost of a rebuild |
-| Fresh-worker scale-up latency | 45GB pull versus 10GB pull plus volume mount. The number that decides which wins under burst |
-| Warm-worker load time | Cached image layer on local disk versus volume read, both → VRAM |
-| Steady-state inference latency | Expected identical. If it is not, the volume read is on the hot path and that is a finding |
-| GPU availability in the pinned region | The volume's hidden cost — measured as which GPU types were actually offerable |
-| Storage cost per month | ~33GB at the published per-GB rate; verify before publishing |
+| Fresh-worker scale-up latency | 45GB pull, versus 10GB pull plus volume mount, versus 10GB pull with weights already on the host. The number that decides which wins under burst |
+| Warm-worker load time | Image layer on local disk, versus volume read, versus host cache read — all → VRAM |
+| Steady-state inference latency | Expected identical across all three. If it is not, the weight source is on the hot path and that is a finding |
+| GPU availability in the pinned region | The volume's hidden cost — measured as which GPU types were actually offerable. The cached endpoint has no pin; its placement is the platform's |
+| Cache staging time (cached only) | Observed once, on first deploy: unbilled, but it is wall-clock the first worker waits — and it pulls the whole repo, duplicate `flux1-dev.safetensors` included, so it stages ~56GB not ~33GB |
+| Storage cost per month | ~33GB at the published per-GB rate for the volume; the cache is platform-managed and free; verify before publishing |
 
-The hypothesis: baked wins on availability and steady state, volume wins on scale-up and iteration. Reported as *when each wins*, not as a single verdict — the answer depends on traffic shape, and saying so is more useful than picking a side.
+The hypothesis: baked wins on availability and steady state, volume wins on iteration, cached wins scale-up outright. Reported as *when each wins*, not as a single verdict — the answer depends on traffic shape, and saying so is more useful than picking a side.
 
 ### 8. Claims made in the specs
 
@@ -169,7 +170,7 @@ Not a performance measurement, but it is what makes the performance measurement 
 4. **Latency** — the sweeps with p50/p95, plus end-to-end as the caller sees it
 5. **Cost** — per GPU per configuration, execution-only, with idle, and storage
 6. **Ceilings** — VRAM and the OOM boundary
-7. **Baked vs network volume** — the platform comparison, with its precondition stated
+7. **Weight delivery three-way** — baked vs volume vs cached, with its precondition stated
 8. **Claims verified** — the 2× CFG cost and the FlashBoot benefit
 9. **Quality vs steps** — the image grid
 10. **Threats to validity** — below

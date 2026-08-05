@@ -101,12 +101,15 @@ Phase 2b is the graded deliverable and is **blocked on RunPod credits**, which a
 | 1 | Worker: schemas, pipeline protocol, inference, handler, guardrail, tests | Suite green, no GPU | No |
 | 1b | **`README.md` and `client/generate.py`, written against the contract** | **A reviewer could run it the moment 2b lands** | No |
 | 2a | `Dockerfile`, `fetch_weights.py`, runbook, benchmark harness | Weight filter verified via `list_repo_files`; harness runs against a fake | No |
-| 2b | **Build both variants on Pod, push, populate volume, deploy two endpoints, smoke test, benchmark** | **Image generated; `BENCHMARKS.md` populated incl. baked-vs-volume** | **Credits** |
+| 2b | **Populate the volume, build and push both images, deploy the volume endpoint, smoke test** | **An image generated from a prompt** | **Credits** |
+| 2c | Benchmark: latency sweeps, cold start, cost. Baked endpoint and the variant comparison if time allows | `BENCHMARKS.md` populated | **Credits** |
 | 3 | Gateway core, adapters, migrations, auth, tests | Coverage gate | No |
 | 4 | Async facade, reconciler, health, compose | E2E against a fake `RunPodClient` | No |
 | 5 | Remaining docs, diagrams | Complete except measured numbers | Partly |
 
 Splitting 2a from 2b is what makes the wait productive: it verifies both build-blockers in [06](06-build-deploy.md) with no GPU and no download.
+
+2b ends the moment a prompt produces an image — that is the graded outcome, and nothing in 2c is allowed to delay reaching it. The baked endpoint and the variant comparison are the first things cut if time runs short.
 
 Until 2b runs, `BENCHMARKS.md` does not exist and no figure anywhere is stated as measured.
 

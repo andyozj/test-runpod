@@ -6,26 +6,59 @@ A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, depl
 
 ## Call it
 
+One command, prompt in, image out:
+
 ```bash
 export RUNPOD_API_KEY=...        # your RunPod key
 export RUNPOD_ENDPOINT_ID=...    # the deployed endpoint
 
-python client/generate.py "a red fox in falling snow, cinematic lighting" --out fox.png
+curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"prompt": "a red fox in falling snow, cinematic lighting"}}' \
+  | jq -r '.output.image_base64' | base64 -d > fox.png
 ```
 
-Or without the client:
+`/runsync` holds the connection and returns the finished output, so a warm job
+(~20-25s, 2.7MB — inside the 20MB cap) completes in a single call. A **cold**
+worker spends 30-60s loading the pipeline first and will outlast the hold, so
+warm the endpoint with one throwaway request before demonstrating.
+
+For anything real, submit and poll — that is what the client does, with live
+progress and observed wall time:
 
 ```bash
-# submit
+python client/generate.py "a red fox in falling snow" --out fox.png
+# job 7f3a-...
+#   IN_PROGRESS 43%
+# saved fox.png  seed=918273  1024x1024  inference=21.4s  observed=24.8s
+```
+
+```bash
+# the same thing by hand
 curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/run" \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"input": {"prompt": "a red fox in falling snow"}}'
 # -> {"id": "abc-123", "status": "IN_QUEUE"}
 
-# poll
 curl -s "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/status/abc-123" \
   -H "Authorization: Bearer $RUNPOD_API_KEY"
+```
+
+**Results expire.** RunPod retains a finished job's output for **30 minutes**
+after `/run`, and **1 minute** after `/runsync`. Anything polling — the client,
+the gateway reconciler — must fetch inside that window; afterwards `/status`
+has nothing left to return.
+
+Or, against a warm worker, one command — `/runsync` holds the connection and returns the finished image (~20-25s):
+
+```bash
+curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"prompt": "a red fox in falling snow"}}' \
+  | jq -r '.output.image_base64' | base64 -d > fox.png
 ```
 
 `GET /status/{id}` returns the handler's output verbatim, so the completed response carries the image inline:
@@ -147,7 +180,7 @@ Two details that will otherwise cost you an hour each:
 | Model | FLUX.1-dev, bf16, unquantized, revision pinned in `contracts/model-revision.txt` |
 | Inference | `diffusers.FluxPipeline`. No `torch.compile` — 3-10 min of compilation on every cold start is net slower for serverless traffic |
 | Weights | **The deployed endpoint mounts a RunPod network volume.** The baked image is also built and published — see *Weight delivery* below |
-| GPU | L40S 48GB. bf16 FLUX needs ~24-26GB steady, so 24GB cards are too tight to be safe |
+| GPU | L40S 48GB. bf16 weights are ~34GB resident (23.8GB transformer + ~9.5GB T5-XXL), plus activations — a 24GB card cannot hold the model |
 | Concurrency | `concurrency_modifier = 1`. The worker is GPU-bound; a second concurrent job causes VRAM contention, not throughput |
 
 Full reasoning, including what is deliberately *not* built and what production would cost, is in [`docs/specs/`](docs/specs/00-overview.md). Engineering conventions are in [`STANDARDS.md`](STANDARDS.md).
@@ -175,7 +208,7 @@ docs/specs/         design, 10 documents
 | Worker implemented and tested | Yes — 64 tests, 96% coverage, no GPU required |
 | Endpoint deployed | **No** — pending RunPod credits |
 | `BENCHMARKS.md` | Not yet. Produced from a single measured run once deployed |
-| Gateway | Specified, not implemented |
+| Gateway | Core, async API and reconciler implemented with tests; runs locally via `compose.yaml` |
 
 Nothing in this README describes performance, because nothing has been measured yet. Every figure it will eventually carry comes from a run whose methodology is specified in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
 
