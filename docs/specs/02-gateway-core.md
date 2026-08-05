@@ -145,6 +145,7 @@ Postgres and httpx implementations live in `adapters/`. The whole gateway is bui
 | `result` | jsonb | nullable |
 | `error_code` | text | nullable |
 | `error_message` | text | nullable |
+| `progress` | jsonb | nullable; latest step/total/percent, overwritten each tick |
 | `correlation_id` | text | indexed |
 | `api_key_id` | text | which caller submitted it |
 | `created_at` / `updated_at` / `completed_at` | timestamptz | `completed_at` nullable |
@@ -192,6 +193,78 @@ The adapter owns all upstream failure handling so `core/` never sees a transport
 - **Timeouts** on every call. An httpx client with no timeout waits forever by default.
 
 Breaker state is per-process and in-memory. That is correct for a single instance and wrong for a fleet; noted in [08](08-production-readiness.md).
+
+## The reconciler
+
+Nothing tells us when a job finishes — webhooks are documented-not-built ([03](03-facades.md)), so the only way to learn an outcome is to ask. The reconciler asks.
+
+It is a distinct hop from the async facade. The client polls *us*; the reconciler polls *RunPod*. Neither is aware of the other, and the client would poll identically if we learned the result by webhook instead.
+
+```
+CLIENT ──poll──▶ GATEWAY ──poll──▶ RUNPOD
+       async facade      reconciler
+```
+
+### Why not just ask RunPod when the client asks
+
+A simpler design exists: have `GET /v1/jobs/{id}` call RunPod live and skip the background loop entirely. It is rejected for one reason.
+
+**If no client is polling, that design never learns the job finished.** No record, no cost attribution, no metrics — and nothing to push. Announcing completion over SSE, a webhook, or an MCP notification requires knowing about it *without being asked*, and the reconciler is the only component that provides that. An on-demand design can answer questions; it can never announce anything.
+
+The secondary reason: RunPod API calls would scale with client poll rate rather than with job count. Ten clients polling every 2s is five calls a second for one job.
+
+### Cadence
+
+| Setting | Value | Reason |
+|---|---|---|
+| Tick interval | 2s | Generation is ~20-25s, so ~10 polls per job. Adds at most 2s of phantom latency |
+| Idle interval | 10s | When nothing is unresolved, stop querying at speed for no reason |
+| Batch limit | 50 per tick | Bounds the work and the upstream call volume per tick |
+| Jitter | ±20% | Two replicas starting together would otherwise tick in lockstep forever |
+
+`claim_unresolved` orders oldest-first by `updated_at`, so when the backlog exceeds the batch limit, no job is starved.
+
+### Rules
+
+**Unknown is not failure.** If `runpod.status()` raises — timeout, connection error, breaker open — the job is left exactly as it is and retried next tick. Writing `FAILED` on our own inability to reach the upstream would discard a perfectly good result over a two-second blip, and terminal states are written once. Only an explicit RunPod `FAILED` becomes our `FAILED`.
+
+**Transitions only advance.** Overlapping ticks can return a stale `IN_PROGRESS` after `COMPLETED` was already written. Terminal states are never overwritten.
+
+**One job's failure does not abort the tick.** Each job is handled independently; an exception on one is logged and the loop continues. Otherwise a single malformed record stops every other job from ever resolving.
+
+**Concurrent reconcilers do not collide.** `FOR UPDATE SKIP LOCKED` means a second instance takes different rows rather than blocking or duplicating.
+
+### Progress
+
+The worker emits per-step progress via `progress_update` ([01](01-worker.md)), which RunPod returns on the status response while the job is still running. The reconciler stores it on the job so a client polling mid-generation gets a percentage rather than a bare `IN_PROGRESS`.
+
+`progress` is a nullable jsonb column, overwritten each tick. It is not history — only the latest value matters, and keeping every step would write 28 rows per image for information nobody reads twice.
+
+This is still pull, not push: RunPod holds the progress and we fetch it. **The tick interval therefore bounds progress granularity** — at 2s against a 22s generation, a client sees roughly ten updates, which is enough for a smooth bar and far short of per-step. Tightening it trades upstream API calls for resolution, and 2s is the chosen point.
+
+A progress update is not a state transition. It never moves `status`, and it is ignored entirely on a terminal job.
+
+### Timeout
+
+A job whose deadline passes becomes `TIMED_OUT` with error code `JOB_TIMEOUT`. This is the only terminal state *we* originate rather than RunPod.
+
+Without it, a job RunPod has lost stays unresolved forever: polled every tick, never answered, accumulating in the claim query.
+
+```
+deadline = created_at + JOB_TIMEOUT_SECONDS   # default 600
+```
+
+600s is deliberately well above RunPod's 300s execution timeout ([01](01-worker.md)) plus plausible queue wait. **The gateway deadline must always exceed the endpoint execution timeout** — set below it and we would time out jobs that are still running normally, then discard their results when they complete.
+
+### Where it runs
+
+**Here:** an asyncio task started in the FastAPI `lifespan` hook, in the same process. One container, nothing extra to run, which is what keeps `docker compose up` to a single command ([06](06-build-deploy.md)).
+
+The consequence is that N gateway replicas means N reconcilers. That is why `SKIP LOCKED` is specified now rather than later.
+
+On shutdown the task is cancelled and awaited, so an in-flight tick completes rather than being killed mid-write.
+
+**In production:** a separate deployment, so API replicas can scale for request load without multiplying polling load. Noted in [08](08-production-readiness.md).
 
 ## The duplicated contract
 

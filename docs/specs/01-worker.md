@@ -150,6 +150,33 @@ Any other pipeline exception maps to `INFERENCE_FAILED` with the detail logged a
 | Cold start, warm latency, cost per image | Phase 2b, measured |
 | Cost of `true_cfg_scale > 1` versus the 2× estimate | Phase 2b, measured |
 
+## Progress reporting
+
+Owning the image means the worker is not a black box for 20-25 seconds. `diffusers` fires `callback_on_step_end` after each denoising step; `runpod.serverless.progress_update(job, ...)` writes into the job record mid-execution, where `GET /status/{id}` can read it while the job is still `IN_PROGRESS`.
+
+```python
+def _on_step(pipe, step: int, timestep: int, kwargs: dict[str, Any]) -> dict[str, Any]:
+    runpod.serverless.progress_update(
+        job, {"step": step + 1, "total": total_steps,
+              "percent": round(100 * (step + 1) / total_steps)}
+    )
+    return kwargs
+```
+
+Without this, every poll during generation returns `IN_PROGRESS` and nothing else — the client cannot distinguish a job three seconds in from one about to finish, and cannot show a progress bar or estimate anything.
+
+It also changes what the downstream facades are worth. A stream carrying one completion event is decorative; a stream carrying live progress is the reason SSE exists ([03](03-facades.md)).
+
+Progress is emitted at most once per step and is a small dict. The callback runs between steps on the GPU thread, so it must stay trivial — anything expensive here is paid 28 times per image.
+
+### Not built: preview images
+
+The `/stream/{job_id}` endpoint plus a generator handler could yield intermediate images — VAE-decode the latents every few steps into a small JPEG, giving progressive previews.
+
+It is not built because of a structural obstacle rather than a lack of appetite. `pipe(...)` is a blocking call and `callback_on_step_end` fires inside it, so **a generator handler cannot yield from the callback**. Real streaming needs the pipeline running on a thread with the callback pushing to a queue that the generator drains — plus a VAE decode costing ~50-150ms per preview on the same GPU doing the work.
+
+`progress_update` has no such constraint: it is an ordinary call, invocable from anywhere, which is why it is the version that ships.
+
 ## Weight path
 
 The worker resolves weights from `WEIGHTS_PATH` in settings. It does not know or care which deployment variant it is running under — baked into the image or mounted from a network volume ([06](06-build-deploy.md)). One code path, two deployments.
