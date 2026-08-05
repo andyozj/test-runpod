@@ -15,6 +15,74 @@ api/  adapters/  workers/     may import core/
 
 `core/` must not import FastAPI, httpx, psycopg, or SQLAlchemy. Enforced by `import-linter` in `make check`, not by review — a stray `from fastapi import HTTPException` passes ruff, mypy, and every test while welding the domain to one transport, and the cost surfaces only when the second facade turns out to be a rewrite.
 
+## Domain types
+
+Everything in `core/`. No framework types, no database types.
+
+```python
+class JobStatus(StrEnum):
+    QUEUED = "QUEUED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    TIMED_OUT = "TIMED_OUT"
+    CANCELLED = "CANCELLED"
+    BLOCKED = "BLOCKED"
+
+class ErrorCode(StrEnum):
+    INVALID_PROMPT = "INVALID_PROMPT"
+    INVALID_DIMENSIONS = "INVALID_DIMENSIONS"
+    INVALID_STEPS = "INVALID_STEPS"
+    PROMPT_BLOCKED = "PROMPT_BLOCKED"
+    IMAGE_BLOCKED = "IMAGE_BLOCKED"
+    OOM = "OOM"
+    INFERENCE_FAILED = "INFERENCE_FAILED"
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    JOB_TIMEOUT = "JOB_TIMEOUT"
+
+@dataclass(frozen=True)
+class RequestContext:
+    """Who is asking and under what trace, threaded through every call."""
+    api_key_id: str
+    correlation_id: str
+    idempotency_key: str | None = None
+
+@dataclass(frozen=True)
+class JobResult:
+    """What the worker produced, as stored on a completed job."""
+    image_url: str | None
+    image_base64: str | None
+    format: str
+    seed: int
+    width: int
+    height: int
+    num_inference_steps: int
+    guidance_scale: float
+    model_version: str
+    inference_seconds: float
+
+@dataclass(frozen=True)
+class Job:
+    """A generation request and everything known about it so far."""
+    id: UUID
+    status: JobStatus
+    request: GenerationRequest
+    context: RequestContext
+    runpod_job_id: str | None
+    result: JobResult | None
+    error_code: ErrorCode | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+```
+
+Frozen dataclasses rather than Pydantic models: these never parse untrusted input. Validation happens at the boundary in `api/`, and by the time a `Job` exists the data is already trusted. Immutability means a transition returns a new `Job` rather than mutating one another caller still holds.
+
+`ErrorCode` is an enum, not a string. The error-code contract requires 100% test coverage ([`STANDARDS.md`](../../STANDARDS.md) §9), which is not achievable if any string can be written into the field.
+
 ## JobService
 
 ```python
@@ -44,7 +112,7 @@ class JobRepository(Protocol):
     async def attach_runpod_id(self, job_id: UUID, runpod_job_id: str) -> Job: ...
     async def mark_in_progress(self, job_id: UUID) -> Job: ...
     async def mark_completed(self, job_id: UUID, result: JobResult) -> Job: ...
-    async def mark_failed(self, job_id: UUID, code: str, message: str) -> Job: ...
+    async def mark_failed(self, job_id: UUID, code: ErrorCode, message: str) -> Job: ...
     async def mark_blocked(self, job_id: UUID, verdict: GuardrailVerdict) -> Job: ...
     async def claim_unresolved(self, limit: int) -> list[Job]: ...
 
@@ -52,6 +120,9 @@ class RunPodClient(Protocol):
     async def submit(self, payload: dict[str, Any]) -> str: ...
     async def status(self, runpod_job_id: str) -> RunPodJobStatus: ...
     async def health(self) -> EndpointHealth: ...
+
+class Clock(Protocol):
+    def now(self) -> datetime: ...
 ```
 
 Postgres and httpx implementations live in `adapters/`. The whole gateway is buildable and testable against fakes for both, which is why Phases 3 and 4 are not blocked on the endpoint existing.
@@ -112,8 +183,6 @@ Rotation means editing settings and restarting. That is acceptable at this scale
 
 Unauthenticated is not an option worth shipping: an open image-generation endpoint is a stranger's GPU on your credit card.
 
-Key rotation and per-key quotas are out of scope — see [08](08-production-readiness.md).
-
 ## RunPod adapter resilience
 
 The adapter owns all upstream failure handling so `core/` never sees a transport concern.
@@ -148,7 +217,7 @@ This is the honest cost of the isolation rule, paid explicitly. Silent drift bet
 
 | Code | Tier | Meaning |
 |---|---|---|
-| `INVALID_PROMPT` | worker, gateway | Blank, or over the T5 token limit |
+| `INVALID_PROMPT` | worker, gateway | Blank, or over the 2000-character cap |
 | `INVALID_DIMENSIONS` | worker, gateway | Outside 256–1536 |
 | `INVALID_STEPS` | worker, gateway | Outside 1–50 |
 | `PROMPT_BLOCKED` | worker, gateway | Guardrail rejection |
@@ -164,8 +233,8 @@ Envelope:
 
 ```json
 {"error": {"code": "INVALID_PROMPT",
-           "message": "Prompt is 640 tokens; the limit is 512.",
-           "suggestion": "Shorten the prompt to under 512 T5 tokens.",
+           "message": "Prompt is 2841 characters; the limit is 2000.",
+           "suggestion": "Shorten the prompt to 2000 characters or fewer.",
            "correlation_id": "01J..."}}
 ```
 
