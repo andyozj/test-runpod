@@ -42,6 +42,7 @@ class ErrorCode(StrEnum):
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     JOB_TIMEOUT = "JOB_TIMEOUT"
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    QUEUE_SATURATED = "QUEUE_SATURATED"
 
 @dataclass(frozen=True)
 class RequestContext:
@@ -172,7 +173,9 @@ Domain enum: `QUEUED`, `IN_PROGRESS`, `COMPLETED`, `FAILED`, `TIMED_OUT`, `CANCE
 
 RunPod's vocabulary (`IN_QUEUE`, `IN_PROGRESS`, `COMPLETED`, `FAILED`, `CANCELLED`, `TIMED_OUT`) is mapped in the adapter. It does not leak into `core/`.
 
-`CANCELLED` has no producer on our side — there is no cancel endpoint. It exists solely because RunPod can report it independently, for instance when a worker is reclaimed, and an unmapped upstream status must not become an unhandled case. Adding a cancel endpoint later is a route plus one client call; the domain already understands the state.
+`CANCELLED` has no producer on our side — we expose no cancel route. It exists because RunPod can report it independently, for instance when a worker is reclaimed, and an unmapped upstream status must not become an unhandled case.
+
+RunPod does provide `POST /v2/{endpoint_id}/cancel/{job_id}`, so adding cancellation is a route plus one adapter call — the domain already understands the state and the upstream already supports it. `/retry` and `/purge-queue` exist on the same API and are similarly available. None are built; none require redesign.
 
 Terminal states are written once. The reconciler only advances a job, never moves it backwards — an out-of-order poll response must not resurrect a completed job.
 
@@ -272,6 +275,38 @@ On shutdown the task is cancelled and awaited, so an in-flight tick completes ra
 
 **In production:** a separate deployment, so API replicas can scale for request load without multiplying polling load. Noted in [08](08-production-readiness.md).
 
+## Queue pressure
+
+RunPod exposes `GET /v2/{endpoint_id}/health`:
+
+```json
+{"jobs": {"completed": 1, "failed": 5, "inProgress": 0, "inQueue": 2, "retried": 0},
+ "workers": {"idle": 0, "running": 0}}
+```
+
+`jobs.inQueue` is the depth and `workers` is the capacity. Both are needed — a raw depth threshold is meaningless on its own, since 20 queued jobs are comfortable against 50 workers and hopeless against 3.
+
+### Rejecting on time, not depth
+
+```
+capacity        = max(workers.running + workers.idle, 1)
+estimated_wait  = (jobs.inQueue / capacity) * AVG_JOB_SECONDS
+```
+
+If `estimated_wait > MAX_QUEUE_WAIT_SECONDS` (default 120), `submit` fails with `429 QUEUE_SATURATED` and `Retry-After: ceil(estimated_wait)`.
+
+Rejecting on estimated time rather than raw depth means the threshold survives a change to `max_workers`, and it makes `Retry-After` a real number rather than a guess. `AVG_JOB_SECONDS` starts at a stated estimate and is replaced by the measured p50 from [09](09-benchmarks.md).
+
+The alternative — accept everything — is worse than it looks. A client whose job sits queued for six minutes and then times out has learned nothing, consumed a queue slot, and will very likely retry. Rejecting immediately lets it back off, and keeps the queue bounded.
+
+### Refreshed on the reconciler tick, not per request
+
+Calling `health()` inside `submit` would add an upstream round trip to the hot path and a second failure mode to every submission.
+
+Instead the reconciler refreshes it on its existing 2s tick and caches the result in memory. Submissions read a value at most 2s stale, at zero latency cost and zero extra upstream calls regardless of request rate.
+
+If the cached value is missing or stale beyond a grace period — the reconciler has died, or RunPod is unreachable — **submissions are allowed through**. This is the one place the design fails open, deliberately: queue pressure is a load-shedding optimisation, not a safety control, and refusing all traffic because we cannot measure the queue converts a monitoring failure into an outage. Guardrails fail closed ([04](04-guardrails.md)); this does not.
+
 ## The duplicated contract
 
 Package isolation ([`STANDARDS.md`](../../STANDARDS.md) §2) forbids the gateway importing from the worker. But both define the generation parameters and both know the error codes, so the contract exists twice.
@@ -305,6 +340,7 @@ This is the honest cost of the isolation rule, paid explicitly. Silent drift bet
 | `INFERENCE_FAILED` | worker | Unclassified pipeline failure |
 | `UNAUTHENTICATED` | gateway | Missing or invalid API key |
 | `UPSTREAM_UNAVAILABLE` | gateway | RunPod unreachable, 5xx, or breaker open |
+| `QUEUE_SATURATED` | gateway | Estimated queue wait over threshold; `Retry-After` set |
 | `JOB_NOT_FOUND` | gateway | Unknown id |
 | `JOB_TIMEOUT` | gateway | Exceeded the 600s deadline |
 | `IDEMPOTENCY_CONFLICT` | gateway | Key reused with a different body |
