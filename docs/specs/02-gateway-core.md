@@ -41,6 +41,7 @@ class ErrorCode(StrEnum):
     UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE"
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     JOB_TIMEOUT = "JOB_TIMEOUT"
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
 
 @dataclass(frozen=True)
 class RequestContext:
@@ -138,7 +139,8 @@ Postgres and httpx implementations live in `adapters/`. The whole gateway is bui
 | Column | Type | Notes |
 |---|---|---|
 | `id` | uuid | pk |
-| `idempotency_key` | text | unique, nullable |
+| `idempotency_key` | text | nullable; unique with `api_key_id` |
+| `request_hash` | text | nullable; detects a key reused with a different body |
 | `runpod_job_id` | text | nullable, indexed |
 | `status` | enum | domain enum, below |
 | `request` | jsonb | validated parameters as submitted |
@@ -157,6 +159,10 @@ Migrations via Alembic. `api_key_id` exists from the first migration — retrofi
 Enforced by the unique constraint, not a read-then-write check. Check-then-insert has exactly the race that idempotency exists to prevent: two concurrent identical requests both see no existing row and both submit, double-billing the GPU.
 
 Insert first, catch the unique violation, return the existing job. The integration suite asserts this with genuinely concurrent inserts, not sequential ones — a sequential test passes against the broken implementation.
+
+**The constraint is on `(api_key_id, idempotency_key)`, not the key alone.** Scoped to the key only, two callers picking the same value collide and one receives the other's image. That is a data leak, not an inconvenience.
+
+`request_hash` is stored with the key. A replay with a matching hash returns the original job; a mismatch is `409 IDEMPOTENCY_CONFLICT` ([03](03-facades.md#idempotency)). Silently returning the first job when the body has changed hands the caller an image of something they did not ask for, with nothing to indicate it.
 
 ### Status
 
@@ -300,7 +306,8 @@ This is the honest cost of the isolation rule, paid explicitly. Silent drift bet
 | `UNAUTHENTICATED` | gateway | Missing or invalid API key |
 | `UPSTREAM_UNAVAILABLE` | gateway | RunPod unreachable, 5xx, or breaker open |
 | `JOB_NOT_FOUND` | gateway | Unknown id |
-| `JOB_TIMEOUT` | gateway | Exceeded deadline |
+| `JOB_TIMEOUT` | gateway | Exceeded the 600s deadline |
+| `IDEMPOTENCY_CONFLICT` | gateway | Key reused with a different body |
 
 Envelope:
 

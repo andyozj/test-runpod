@@ -49,8 +49,8 @@ What is actually handed over:
 | Registry | GHCR |
 | Tiers | Serverless worker (graded) + FastAPI gateway (beyond the brief) |
 | Gateway hosting | **Local via `docker compose`.** Deployment path documented, not performed |
-| Primary facade | **Async** — submit, poll |
-| Also built | Sync wrapper (demo-grade), API-key auth, retry + circuit breaker, health endpoints, prompt guardrails |
+| Facade | **Async only** — submit, poll. No synchronous endpoint |
+| Also built | API-key auth, idempotency keys, retry + circuit breaker, health endpoints, prompt guardrails, per-step progress |
 | Documented only | Webhook-out, SSE, WebSocket, MCP, rate limiting, metrics export |
 | Out of scope | Fine-tuning, LoRA, batch inference, multi-region |
 
@@ -85,7 +85,7 @@ The worker code is identical across both. Only the weight path differs, resolved
 
 Generation takes ~20-25s. A synchronous HTTP call held open that long fights every load balancer default and cannot be safely retried — a retry re-bills a fresh generation.
 
-So `POST /v1/jobs` → `job_id`, `GET /v1/jobs/{id}` → result is the primary interface. `POST /v1/images` exists as a thin blocking wrapper for `curl` and the demo, documented as demo-grade.
+So `POST /v1/jobs` → `job_id`, `GET /v1/jobs/{id}` → result is the only interface. No synchronous endpoint is provided: it would bound concurrency by held connections rather than GPU capacity, and on a cold worker — 30-60s of pipeline load before 20-25s of generation — it would exceed any deadline safe against load-balancer idle timeouts. The convenience path would be the one most likely to look broken on a first call. `client/generate.py` covers the two-call ergonomics instead.
 
 This also removes a risk from the build: with async as the default the worker uploads to object storage and returns a **reference** rather than inline base64, so RunPod's undocumented response-payload ceiling stops being something we discover the hard way. Base64 remains as the zero-infrastructure fallback.
 

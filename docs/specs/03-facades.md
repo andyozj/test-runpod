@@ -2,45 +2,177 @@
 
 Transports over one `JobService`. The argument of this document is that a transport choice is a **cost imposed on the caller**, not an implementation detail — so each option is described by what it forces the consumer to do.
 
-## Built
+## Async only
 
-### Async — the primary interface
-
-```
-POST /v1/jobs        → 202 {"job_id": "...", "status": "QUEUED"}
-GET  /v1/jobs/{id}   → 200 {"status": "COMPLETED", "result": {...}}
-```
-
-**Consumer cost:** two calls plus a polling loop, and a decision about poll interval.
-
-**Consumer benefit:** retry-safe, survives client restarts, no held connection, and the job survives the client crashing. For a 20-25s operation this is the honest interface.
-
-Poll interval guidance is published in the API docs: 2s is reasonable, backing off after 60s. Undocumented polling guidance produces either hammering or sluggish clients.
-
-### Sync — demo-grade wrapper
+There is one interface. Submit, then poll.
 
 ```
-POST /v1/images      → 200 {image}  |  202 {"job_id": "..."}
+POST /v1/jobs        → 202  {"job_id": ...}
+GET  /v1/jobs/{id}   → 200  status, progress, and result when terminal
 ```
 
-Submits and polls internally until terminal, bounded by a server-side deadline set below the typical client timeout. On expiry it returns `202` with the `job_id` rather than hanging.
+**No synchronous endpoint is provided.** A blocking call was considered as a `curl`-friendly convenience and rejected on two grounds:
 
-**Consumer cost:** holds a connection for ~20-25s. Most load balancers and API gateways idle-timeout between 30 and 60s, so this is close to the edge before anything goes wrong. A retry is not safe — it re-bills a fresh generation.
+- **It does not scale.** Every in-flight request holds a connection and a worker for 20-25s. Concurrency is then bounded by held connections rather than by GPU capacity, and the failure mode under load is connection exhaustion in the gateway — while the GPUs sit idle.
+- **It would fail exactly when first tried.** A cold worker spends 30-60s loading the pipeline before generating for another 20-25s. Any deadline short enough to be safe against load-balancer idle timeouts (typically 30-60s) is comfortably exceeded by the first request after an idle period. The convenience path would be the path most likely to look broken on a reviewer's opening call.
 
-**Two response shapes on one endpoint is a wart.** It is tolerable only because sync is explicitly the convenience path: the `202` is the async interface showing through, and the documentation says so. The alternative — a hard `504` — is cleaner to type but discards a job that is still running and will still be billed.
+The cost is that a bare `curl` is two commands instead of one. `client/generate.py` covers that, and the README shows both.
 
-Documented as demo-grade. Not the interface to build a client against.
+## Endpoints
+
+All routes require `Authorization: Bearer <api-key>`.
+
+### `POST /v1/jobs`
+
+Headers:
+
+| Header | Required | Purpose |
+|---|---|---|
+| `Authorization` | yes | `Bearer <api-key>` |
+| `Idempotency-Key` | no | Safe retries — see below |
+| `X-Correlation-ID` | no | Generated if absent; echoed on the response |
+
+Body — only `prompt` is required:
+
+```json
+{
+  "prompt": "a red fox in falling snow, cinematic lighting",
+  "width": 1024,
+  "height": 1024,
+  "num_inference_steps": 28,
+  "guidance_scale": 3.5,
+  "seed": null,
+  "output_format": "png"
+}
+```
+
+`202 Accepted`:
+
+```json
+{
+  "job_id": "0192f3a1-...",
+  "status": "QUEUED",
+  "created_at": "2026-08-05T10:31:02Z"
+}
+```
+
+### `GET /v1/jobs/{id}`
+
+One response shape, three populated states.
+
+Running:
+
+```json
+{
+  "job_id": "0192f3a1-...",
+  "status": "IN_PROGRESS",
+  "progress": {"step": 12, "total": 28, "percent": 43},
+  "result": null,
+  "error": null,
+  "created_at": "2026-08-05T10:31:02Z",
+  "updated_at": "2026-08-05T10:31:19Z"
+}
+```
+
+Completed:
+
+```json
+{
+  "job_id": "0192f3a1-...",
+  "status": "COMPLETED",
+  "progress": {"step": 28, "total": 28, "percent": 100},
+  "result": {
+    "image_url": "https://.../8f3a2c.png",
+    "image_base64": null,
+    "format": "png",
+    "seed": 918273,
+    "width": 1024, "height": 1024,
+    "num_inference_steps": 28, "guidance_scale": 3.5,
+    "model_version": "black-forest-labs/FLUX.1-dev@<revision>",
+    "inference_seconds": 21.4
+  },
+  "error": null,
+  "created_at": "...", "completed_at": "..."
+}
+```
+
+Failed or blocked:
+
+```json
+{
+  "job_id": "0192f3a1-...",
+  "status": "BLOCKED",
+  "progress": null,
+  "result": null,
+  "error": {
+    "code": "PROMPT_BLOCKED",
+    "message": "Prompt rejected by content policy.",
+    "suggestion": "Rephrase the prompt and resubmit.",
+    "correlation_id": "01J..."
+  }
+}
+```
+
+`progress` is the only reason polling mid-generation is informative. Without it every poll before completion returns an indistinguishable `IN_PROGRESS`, and no client can show a bar or estimate anything ([02](02-gateway-core.md#progress)).
+
+Poll guidance, published in the API docs: **every 2s**, backing off to 5s after 60s, giving up at the 600s job deadline. Undocumented polling guidance produces either hammering or sluggish clients.
+
+### `GET /health`, `GET /health/detailed`
+
+See [05](05-observability.md).
+
+## Status codes
+
+| Code | When | Error code |
+|---|---|---|
+| `200` | Status read; or an idempotent replay of an existing job | — |
+| `202` | Job created | — |
+| `400` | Request failed validation | `INVALID_PROMPT`, `INVALID_DIMENSIONS`, `INVALID_STEPS` |
+| `401` | Missing or invalid API key | `UNAUTHENTICATED` |
+| `404` | Unknown job id | `JOB_NOT_FOUND` |
+| `409` | `Idempotency-Key` reused with a different body | `IDEMPOTENCY_CONFLICT` |
+| `429` | Queue depth over threshold; `Retry-After` set | `QUEUE_SATURATED` |
+| `503` | RunPod unreachable or circuit breaker open | `UPSTREAM_UNAVAILABLE` |
+
+FastAPI's default `422` for validation failures is remapped to `400` with our envelope, so every error a caller sees has the same shape.
+
+**A failed job is still `200`.** The HTTP call succeeded; the *job* failed, and its outcome is in the body. Returning `500` for a job that OOM'd would conflate "your request was malformed or we are broken" with "the work ran and did not succeed" — and a client retrying on 5xx would resubmit a request that will fail identically. Transport failures get transport status codes; job outcomes get job status.
+
+## Idempotency
+
+The client generates a unique key per logical request — a UUID is fine — and sends it as a header:
+
+```
+Idempotency-Key: 7f3a9c22-...
+```
+
+This follows the Stripe convention because clients and agents already know it.
+
+Behaviour:
+
+| Situation | Response |
+|---|---|
+| New key | Job created, `202` |
+| Same key, same body | `200` with the **original** job, header `Idempotency-Replayed: true`. No second generation, no second charge |
+| Same key, different body | `409 IDEMPOTENCY_CONFLICT` |
+| No key | Every request creates a new job |
+
+The `409` matters. Silently returning the first job when the body has changed hands the caller an image of something they did not ask for, and the mismatch would be invisible. A request hash is stored alongside the key to detect it.
+
+**Keys are scoped per caller.** The unique constraint is on `(api_key_id, idempotency_key)`, not the key alone — otherwise two clients choosing the same key collide, and one receives the other's image. That is a data leak, not an inconvenience.
+
+Without a key, a retry after a network timeout generates and bills twice. With one, the retry is free. This is the single cheapest protection against double-spend on a 20-25s GPU operation.
 
 ## Documented, not built
 
-The protocol boundary in [02](02-gateway-core.md) means each is an addition rather than a rewrite. Cost below is what the *consumer* pays.
+The protocol boundary in [02](02-gateway-core.md) makes each an addition rather than a rewrite. Cost below is what the *consumer* pays.
 
 | Facade | Consumer cost | Consumer benefit | Why not built |
 |---|---|---|---|
 | **Webhook out** | Must run a public HTTPS endpoint, verify signatures, tolerate duplicate and out-of-order delivery, and *still* poll as a fallback. Impossible for browser clients | No polling cost, lowest notification latency | Callback field plumbed, route unbuilt. Delivery is best-effort — RunPod retries twice at 10s intervals then stops — so the poller is required regardless |
-| **SSE** | One long-lived connection per job. Intermediate proxies buffer and break it. Unidirectional. Needs reconnect handling via `Last-Event-ID` | Live progress, much better perceived latency | **Now genuinely worthwhile** — the worker emits per-step progress and the reconciler stores it ([01](01-worker.md), [02](02-gateway-core.md)), so a stream would carry real events rather than one completion. Unbuilt for scope, not for lack of anything to send |
-| **WebSocket** | Connection state management, reconnect logic, sticky sessions through any load balancer | Bidirectional; enables mid-generation cancel | Infrastructure weight disproportionate to the benefit here |
-| **MCP** | None — the client is an agent framework and the tool schema is the contract | Agent-native call with zero glue | A thin wrapper over async. Cheap to add; out of scope |
+| **SSE** | One long-lived connection per job. Intermediate proxies buffer and break it. Unidirectional. Needs reconnect via `Last-Event-ID` | Live progress without a polling loop | **The strongest candidate.** The worker already emits per-step progress and the reconciler already stores it, so a stream would carry real events. Unbuilt for scope, not for lack of content |
+| **WebSocket** | Connection state, reconnect logic, sticky sessions through any load balancer | Bidirectional; enables mid-generation cancel | Infrastructure weight disproportionate to the benefit |
+| **MCP** | None — the client is an agent framework and the tool schema is the contract | Agent-native call with zero glue | A thin wrapper over the async API. Cheap to add; out of scope |
 | **gRPC** | Codegen and a toolchain | Efficient streaming, typed contract | No consumer asking for it |
 
 ## Why the result shape decides which facades are possible
@@ -51,11 +183,11 @@ A ~200-byte result can be pushed: it fits in an SSE event, a webhook body, a Web
 
 So the decision about which transports are *available* is made in the worker's serialisation, not in the API layer — and it is made once, early, in the place least visible to whoever later wants to add streaming. Returning bytes would foreclose event-driven delivery entirely while looking like a local choice about response encoding.
 
-## Why the boundary is what makes this cheap
+## Why the boundary makes this cheap
 
-Each facade above translates HTTP-shaped input into a `JobService` call and translates the result back. None of them touch persistence, RunPod, or the domain rules.
+Each facade translates HTTP-shaped input into a `JobService` call and translates the result back. None touch persistence, RunPod, or the domain rules.
 
-That holds only while `core/` stays free of transport concerns. One `HTTPException` raised from `JobService` and every other facade inherits an HTTP dependency it has no use for. This is why the rule is enforced by `import-linter` rather than by intention — see [02](02-gateway-core.md#layering).
+That holds only while `core/` stays free of transport concerns. One `HTTPException` raised from `JobService` and every other facade inherits an HTTP dependency it has no use for. Hence `import-linter` rather than intention — see [02](02-gateway-core.md#layering).
 
 ## Agent-callable design
 
@@ -65,4 +197,4 @@ Callers include automated agents, which changes three things:
 - Only `prompt` is required. Everything else has a defensible default, so a minimal call succeeds.
 - Responses echo **effective** values — the seed actually used, the dimensions actually rendered, the model version. An agent never has to infer what happened, and a retry with the echoed seed is deterministic.
 
-This is also the entire prerequisite for the MCP facade: if the async API is agent-callable, MCP is a schema wrapper.
+This is the entire prerequisite for the MCP facade: if the async API is agent-callable, MCP is a schema wrapper.
