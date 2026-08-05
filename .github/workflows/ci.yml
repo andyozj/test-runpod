@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [worker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync
+        working-directory: ${{ matrix.package }}
+        run: uv sync --all-groups
+
+      - name: Format
+        working-directory: ${{ matrix.package }}
+        run: uv run ruff format --check .
+
+      - name: Lint
+        working-directory: ${{ matrix.package }}
+        run: uv run ruff check .
+
+      - name: Types
+        working-directory: ${{ matrix.package }}
+        run: uv run mypy src/
+
+      - name: Tests
+        working-directory: ${{ matrix.package }}
+        run: uv run pytest -q --cov --cov-fail-under=80
+
+      - name: Doctests
+        if: matrix.package == 'worker'
+        working-directory: worker
+        run: |
+          uv run pytest --doctest-modules -q \
+            src/worker/schemas.py src/worker/guardrails.py src/worker/errors.py
+
+# The worker image is deliberately NOT built here. A ~45GB image against the
+# ~14GB of free disk on a standard runner is a hard stop, not a slow path.
+# Build and push happen on a RunPod Pod; see docs/specs/06-build-deploy.md.

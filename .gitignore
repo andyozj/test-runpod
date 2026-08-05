@@ -9,3 +9,7 @@ htmlcov/
 .coverage
 outputs/
 *.safetensors
+uv.lock.bak
+*.png
+!docs/**/*.png
+outputs/

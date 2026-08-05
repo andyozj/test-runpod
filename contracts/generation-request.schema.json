@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GenerationRequest",
+  "type": "object",
+  "required": ["prompt"],
+  "additionalProperties": false,
+  "properties": {
+    "prompt": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "width": {"type": "integer", "minimum": 256, "maximum": 1536, "default": 1024},
+    "height": {"type": "integer", "minimum": 256, "maximum": 1536, "default": 1024},
+    "num_inference_steps": {"type": "integer", "minimum": 1, "maximum": 50, "default": 28},
+    "guidance_scale": {"type": "number", "minimum": 0, "maximum": 20, "default": 3.5},
+    "seed": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647, "default": null},
+    "output_format": {"type": "string", "enum": ["png", "jpeg"], "default": "png"},
+    "correlation_id": {"type": ["string", "null"], "default": null}
+  }
+}

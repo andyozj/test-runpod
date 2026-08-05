@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "codes": [
+    "INVALID_PROMPT",
+    "INVALID_DIMENSIONS",
+    "INVALID_STEPS",
+    "PROMPT_BLOCKED",
+    "IMAGE_BLOCKED",
+    "OOM",
+    "INFERENCE_FAILED",
+    "UNAUTHENTICATED",
+    "UPSTREAM_UNAVAILABLE",
+    "JOB_NOT_FOUND",
+    "JOB_TIMEOUT",
+    "IDEMPOTENCY_CONFLICT",
+    "QUEUE_SATURATED"
+  ]
+}
