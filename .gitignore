@@ -12,6 +12,7 @@ outputs/
 uv.lock.bak
 *.png
 !docs/**/*.png
+!samples/**/*.png
 outputs/
 
 .DS_Store

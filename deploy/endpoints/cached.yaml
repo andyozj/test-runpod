@@ -33,13 +33,13 @@ scaler_type: QUEUE_DELAY
 scaler_value: 4
 
 # The CUDA-wheel / host-driver pairing. uv.lock resolves torch with cu130
-# wheels, which need CUDA-13-capable hosts; declaring it here fails fast on
-# scheduling instead of at model load, and is the one-line fix if the first
-# deploy lands on older drivers. Widen this only after repinning torch.
+# wheels, which need drivers from CUDA 13 hosts — a 12.x host fails CUDA init
+# at model load. Declaring it here fails fast at scheduling instead. If the
+# 13.0 pool proves too small, the fix is repinning torch to cu12x wheels and
+# widening this list in the same commit; listing 12.x now would defeat the
+# filter's purpose.
 allowed_cuda_versions:
   - "13.0"
-  - "12.9"
-  - "12.8"
 
 # Disk for the image plus working space. The image is ~2.9GB.
 container_disk_gb: 20

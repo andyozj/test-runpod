@@ -89,4 +89,9 @@ ENV MODEL_REVISION=${MODEL_REVISION}
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
+# Non-root: the worker only reads /app and the weight mount, and a container
+# that cannot write to itself is one less thing to reason about.
+RUN useradd --uid 1000 --create-home worker
+USER worker
+
 CMD ["python", "-m", "worker.handler"]
