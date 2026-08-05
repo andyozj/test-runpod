@@ -156,7 +156,16 @@ The production path is documented rather than performed: container image, manage
 
 ## Endpoint configuration as code
 
-RunPod's GraphQL API exposes `saveEndpoint`, which both creates and updates an endpoint — passing an existing ID modifies it in place. `deleteEndpoint` and a `myself` query round out the surface.
+RunPod's REST API at `https://rest.runpod.io/v1` is the current management surface; GraphQL `saveEndpoint` is legacy and models the problem differently.
+
+REST splits it in two, and the split shapes the script:
+
+| Resource | Owns |
+|---|---|
+| **Template** | Image, environment variables, container disk |
+| **Endpoint** | GPU list, scaling, timeouts, network volume, CUDA filter, `templateId` |
+
+So a deploy is two idempotent upserts — look up by name, create if absent, `PATCH` if present — not one mutation.
 
 So the endpoints are **not** created by clicking through the console. Both are declared in committed config and applied by a script:
 
@@ -166,7 +175,9 @@ deploy/endpoints/volume.yaml
 scripts/apply_endpoint.py --config deploy/endpoints/baked.yaml --tag 0.1.0-a3f21c8-baked
 ```
 
-Each file carries GPU type, min and max workers, idle timeout, execution timeout, `concurrency_modifier`, network volume, datacenter, and environment references.
+Each file carries the GPU priority list, min and max workers, idle timeout, execution timeout, scaler type and value, network volume, datacenters, environment, and `allowed_cuda_versions`.
+
+**`allowed_cuda_versions` is the lever for the wheel/driver pairing.** `uv.lock` resolves torch with cu130 wheels, which need CUDA-13-capable hosts. Declaring the filter makes a mismatch fail at *scheduling* — no worker is offered — rather than at model load on a worker already billing. It is also the one-line fix if the first deploy lands on older drivers.
 
 The console is not the source of truth. "Why is the idle timeout 60s?" must be answerable from the repository and reviewable in a diff, and an endpoint deleted by accident must be reconstructible without archaeology. Recording values in a runbook would achieve the first two; only applied config achieves the third.
 

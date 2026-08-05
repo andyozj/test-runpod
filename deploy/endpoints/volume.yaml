@@ -21,13 +21,30 @@ workers:
 idle_timeout_s: 60
 execution_timeout_ms: 300000
 flashboot: true
+
+# Scale up when a job waits longer than this many seconds.
+scaler_type: QUEUE_DELAY
+scaler_value: 4
+
+# The CUDA-wheel / host-driver pairing. uv.lock resolves torch with cu130
+# wheels, which need CUDA-13-capable hosts; declaring it here fails fast on
+# scheduling instead of at model load, and is the one-line fix if the first
+# deploy lands on older drivers. Widen this only after repinning torch.
+allowed_cuda_versions:
+  - "13.0"
+  - "12.9"
+  - "12.8"
+
+# Disk for the image plus working space. The image is ~2.9GB.
+container_disk_gb: 20
 concurrency_modifier: 1
 
 # DIFFERENCE: the volume holds the weights, and pins this endpoint to one
 # datacenter. That narrows the GPU pool — and it narrows precisely when
 # scaling up under load, which is when the volume was supposed to help.
 network_volume_id: REPLACE_WITH_VOLUME_ID
-datacenter: US-KS-2   # must match the volume's datacenter
+datacenters:
+  - US-KS-2   # must match the volume's datacenter
 
 env:
   WEIGHTS_PATH: /runpod-volume/flux   # DIFFERENCE: mounted, not baked

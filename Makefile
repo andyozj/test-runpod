@@ -69,14 +69,20 @@ doctest: ## Run the executable examples
 weights-check: ## Verify the weight filter against the live manifest. No download.
 	cd worker && uv run python scripts/fetch_weights.py --check
 
-.PHONY: build-baked
-build-baked: ## Build the baked-weights image. Run on a RunPod Pod.
-	docker buildx build --secret id=hf_token,env=HF_TOKEN \
-		--build-arg MODEL_REVISION=$$(cat contracts/model-revision.txt) \
-		-f worker/Dockerfile -t $(IMAGE):$(TAG)-baked .
+# --platform linux/amd64 is not optional. Built on an arm64 Mac without it,
+# the image is one RunPod cannot run, and the failure presents as a worker that
+# starts and immediately dies.
 
 .PHONY: build-volume
-build-volume: ## Build the network-volume image. Run on a RunPod Pod.
-	docker buildx build --build-arg BAKE_WEIGHTS=false \
+build-volume: ## Build the deployed image (~2.9GB, no weights). Runs locally.
+	docker buildx build --platform linux/amd64 \
+		--build-arg BAKE_WEIGHTS=false \
 		--build-arg MODEL_REVISION=$$(cat contracts/model-revision.txt) \
 		-f worker/Dockerfile -t $(IMAGE):$(TAG)-volume .
+
+.PHONY: build-baked
+build-baked: ## Build the weights-in-image variant (~45GB). Documented, not deployed.
+	docker buildx build --platform linux/amd64 \
+		--secret id=hf_token,env=HF_TOKEN \
+		--build-arg MODEL_REVISION=$$(cat contracts/model-revision.txt) \
+		-f worker/Dockerfile -t $(IMAGE):$(TAG)-baked .

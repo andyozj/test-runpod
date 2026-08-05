@@ -24,7 +24,23 @@ workers:
 idle_timeout_s: 60  # long enough that a demo sequence stays warm. Billed while
                     # idling, so this is a real cost, not a free convenience.
 execution_timeout_ms: 300000   # above worst case 50 steps at 1536²
-flashboot: true                # keeps VRAM resident between jobs
+flashboot: true
+
+# Scale up when a job waits longer than this many seconds.
+scaler_type: QUEUE_DELAY
+scaler_value: 4
+
+# The CUDA-wheel / host-driver pairing. uv.lock resolves torch with cu130
+# wheels, which need CUDA-13-capable hosts; declaring it here fails fast on
+# scheduling instead of at model load, and is the one-line fix if the first
+# deploy lands on older drivers. Widen this only after repinning torch.
+allowed_cuda_versions:
+  - "13.0"
+  - "12.9"
+  - "12.8"
+
+# Disk for the image plus working space. The image is ~2.9GB.
+container_disk_gb: 20                # keeps VRAM resident between jobs
 
 # GPU-bound. A second concurrent job causes VRAM contention, not throughput.
 concurrency_modifier: 1
@@ -32,7 +48,7 @@ concurrency_modifier: 1
 # No network volume: weights are in the image, so the endpoint is free to run
 # in any datacenter with capacity.
 network_volume_id: null
-datacenter: null
+datacenters: null
 
 env:
   WEIGHTS_PATH: /opt/weights

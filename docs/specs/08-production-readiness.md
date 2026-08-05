@@ -24,7 +24,7 @@ An honest account of what this is not. The engineering is production-*shaped*; i
 | Cancellation | `POST /v1/jobs/{id}/cancel` delegating to RunPod's own cancel — the platform owns the queue, so only it can stop the work and the billing |
 | Deploy safety | Immutable `{version}-{sha}-{variant}` tags, one-input rollback workflow, `latest` never deployed |
 | Secret management | RunPod secrets manager, referenced as `{{ RUNPOD_SECRET_* }}`. No plaintext credential in committed config or image — [06](06-build-deploy.md#secrets) |
-| Config as code | Both endpoints declared in `deploy/endpoints/*.yaml`, applied via `saveEndpoint`. Reviewable in a diff, reconstructible after deletion |
+| Config as code | Endpoints declared in `deploy/endpoints/*.yaml`, applied through the REST API as a template upsert then an endpoint upsert. Reviewable in a diff, reconstructible after deletion |
 | Deploy automation | Manually-triggered workflow taking a tag; rollback is the same workflow with the previous tag |
 | Clean shutdown | Reconciler task cancelled and awaited under the lifespan hook, so an in-flight tick completes |
 | Prompt retention for audit | Prompts stored on the job row deliberately, so a generation can be traced to what was asked for |

@@ -142,15 +142,17 @@ make weights-check # verify the weight filter against HF. Downloads nothing.
 
 ## Build and deploy
 
-Neither image is built in CI: the baked one is ~45GB against ~14GB of free disk on a standard runner. Build on a RunPod GPU Pod, which also has datacenter bandwidth to HuggingFace and GHCR. Full procedure in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+The deployed image is ~2.9GB — no weights, and no CUDA base image, since the torch wheel carries its own libraries. **Build it locally**; there is no Pod in the procedure. Full steps in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ```bash
 export HF_TOKEN=...   # requires accepting the FLUX.1-dev licence on HuggingFace
 export IMAGE=ghcr.io/OWNER/flux-worker TAG=0.1.0-$(git rev-parse --short HEAD)
 
-make build-volume IMAGE=$IMAGE TAG=$TAG   # ~10GB, deployed
-make build-baked  IMAGE=$IMAGE TAG=$TAG   # ~45GB, published
+make build-volume IMAGE=$IMAGE TAG=$TAG   # ~2.9GB, deployed
+docker push $IMAGE:$TAG-volume
 ```
+
+`--platform linux/amd64` is set in the Makefile. Without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
 
 ### Weight delivery
 
