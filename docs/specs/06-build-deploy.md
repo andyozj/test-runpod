@@ -40,6 +40,29 @@ Base: `nvidia/cuda:12.4.1-runtime-ubuntu22.04`. `runtime` not `devel` — the de
 
 Expected final size ~45GB.
 
+## Two weight-delivery variants
+
+Both are built. The worker code is identical; only the weight path differs, so this is one image definition with a build argument rather than two codebases.
+
+**Baked (primary).** `fetch_weights.py` runs at build time, weights land in the image, `WEIGHTS_PATH` points at the image path. ~45GB. No region constraint. This is what the brief asks for.
+
+**Network volume.** The weights layer is skipped, producing a ~10GB image. A RunPod network volume is populated once from a Pod and mounted at `/runpod-volume`; `WEIGHTS_PATH` points there.
+
+```dockerfile
+ARG BAKE_WEIGHTS=true
+RUN --mount=type=secret,id=hf_token \
+    if [ "$BAKE_WEIGHTS" = "true" ]; then \
+      HF_TOKEN=$(cat /run/secrets/hf_token) python scripts/fetch_weights.py; \
+    fi
+```
+
+Two consequences worth stating rather than discovering:
+
+- **The volume pins the endpoint to one datacenter.** Volume and endpoint must be co-located, which narrows the GPU pool — and it narrows exactly when you are scaling up under load, which is when the volume was supposed to help.
+- **The startup check must know which variant it is.** Fail fast if `WEIGHTS_PATH` is absent. Without it, a misconfigured volume mount silently falls through to downloading 33GB from HuggingFace on every cold start, which looks like "slow" rather than "broken".
+
+Populating the volume is a one-time Pod operation, documented in `RUNBOOK.md`. Storage bills per GB per month for as long as it exists — delete it after the benchmark run.
+
 ## Registry
 
 GHCR, not Docker Hub. Docker Hub's free-tier pull rate limits apply to the *puller*, and RunPod scaling up several workers means several pulls of a 45GB image in a short window — exactly the shape that trips the limit, at exactly the moment you need capacity.

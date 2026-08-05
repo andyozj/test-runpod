@@ -84,7 +84,22 @@ Queue wait is the number a user feels and the one a latency figure omits.
 
 The payload measurement resolves the open question from [01](01-worker.md): RunPod does not document a response ceiling, so it gets probed at 1536² rather than assumed.
 
-### 7. Quality versus steps
+### 7. Weight delivery: baked versus network volume
+
+Two endpoints, identical worker code, differing only in where weights come from. The headline platform comparison.
+
+| Measured | Why it matters |
+|---|---|
+| Image size and push duration | Iteration speed during development, and the practical cost of a rebuild |
+| Fresh-worker scale-up latency | 45GB pull versus 10GB pull plus volume mount. The number that decides which wins under burst |
+| Warm-worker load time | Cached image layer on local disk versus volume read, both → VRAM |
+| Steady-state inference latency | Expected identical. If it is not, the volume read is on the hot path and that is a finding |
+| GPU availability in the pinned region | The volume's hidden cost — measured as which GPU types were actually offerable |
+| Storage cost per month | ~33GB at the published per-GB rate; verify before publishing |
+
+The hypothesis: baked wins on availability and steady state, volume wins on scale-up and iteration. Reported as *when each wins*, not as a single verdict — the answer depends on traffic shape, and saying so is more useful than picking a side.
+
+### 8. Quality versus steps
 
 A fixed-seed grid across step counts, committed as images.
 
@@ -103,14 +118,15 @@ Not a performance measurement, but it is what makes the performance measurement 
 
 `BENCHMARKS.md` structure:
 
-1. **Summary** — headline numbers and the GPU recommendation, with the reasoning
+1. **Summary** — headline numbers, the GPU recommendation, and the weight-delivery recommendation, with reasoning
 2. **Methodology** — the rules above, so the numbers are checkable
 3. **Cold start** — decomposed table, cold vs FlashBoot
 4. **Latency** — the sweeps, with p50/p95
 5. **Cost** — per GPU per configuration, execution-only and with idle
 6. **Ceilings** — VRAM, OOM boundary, payload sizes
-7. **Quality vs steps** — the image grid
-8. **Threats to validity** — below
+7. **Baked vs network volume** — the platform comparison
+8. **Quality vs steps** — the image grid
+9. **Threats to validity** — below
 
 ## Threats to validity
 

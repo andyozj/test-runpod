@@ -44,7 +44,7 @@ What is actually handed over:
 |---|---|
 | Model | `black-forest-labs/FLUX.1-dev`, bf16, unquantized |
 | Inference | `diffusers.FluxPipeline`. No `torch.compile`, no ComfyUI |
-| Weights | Baked into the image, per the explicit instruction |
+| Weights | **Two variants.** Baked into the image (primary, per the explicit instruction) and a network-volume variant, benchmarked against each other |
 | Build host | RunPod GPU Pod |
 | Registry | GHCR |
 | Tiers | Serverless worker (graded) + FastAPI gateway (beyond the brief) |
@@ -52,6 +52,27 @@ What is actually handed over:
 | Also built | Sync wrapper (demo-grade), API-key auth, retry + circuit breaker, health endpoints, prompt guardrails |
 | Documented only | Webhook-out, SSE, WebSocket, MCP, rate limiting, metrics export |
 | Out of scope | Fine-tuning, LoRA, batch inference, multi-region |
+
+## Why two weight-delivery variants
+
+The brief is explicit: *"Build a Docker image that includes your serverless handler and the model."* Baked weights are therefore the primary deliverable, and a volume-only submission would fail the first grading criterion.
+
+But network volumes are one of RunPod's distinguishing features, and ignoring them leaves the platform half-used. So both are built and measured, and the report says when each wins.
+
+| | Baked | Network volume |
+|---|---|---|
+| Image size | ~45GB | ~10GB |
+| Fresh-worker scale-up | Pull 45GB | Pull 10GB, mount weights |
+| Warm worker | Image layer cached, disk → VRAM | Volume read → VRAM |
+| Region | Any datacenter | **Pinned to the volume's datacenter** |
+| Build/push iteration | Slow | Fast |
+| Storage cost | None beyond registry | Per-GB, per-month |
+
+The region constraint is the tradeoff that usually goes unwritten: a volume pins the endpoint to one datacenter, which narrows the GPU pool available — and that bites precisely when scaling up under load, which is the moment the volume was supposed to help.
+
+The hypothesis worth testing is that baked wins on availability and steady state, while the volume wins on scale-up latency and on iteration speed during development. [09](09-benchmarks.md) measures it rather than assuming it.
+
+The worker code is identical across both. Only the weight path differs, resolved from settings, so this is a deployment variant rather than a code fork.
 
 ## Two design rules that everything else follows from
 
@@ -76,7 +97,7 @@ Phase 2b is the graded deliverable and is **blocked on RunPod credits**, which a
 | 0 | Scaffold, both `pyproject.toml`, pre-commit, CI | `make check` green | No |
 | 1 | Worker: schemas, pipeline protocol, inference, handler, guardrail, tests | Suite green, no GPU | No |
 | 2a | `Dockerfile`, `fetch_weights.py`, runbook, benchmark harness | Weight filter verified via `list_repo_files`; harness runs against a fake | No |
-| 2b | **Build on Pod, push, deploy, smoke test, benchmark** | **Image generated; `BENCHMARKS.md` populated** | **Credits** |
+| 2b | **Build both variants on Pod, push, populate volume, deploy two endpoints, smoke test, benchmark** | **Image generated; `BENCHMARKS.md` populated incl. baked-vs-volume** | **Credits** |
 | 3 | Gateway core, adapters, migrations, auth, tests | Coverage gate | No |
 | 4 | Async + sync facades, reconciler, health, compose | E2E against a fake `RunPodClient` | No |
 | 5 | Client demo, README, docs | Complete except measured numbers | Partly |
@@ -89,16 +110,18 @@ Until 2b runs, `BENCHMARKS.md` does not exist and no figure anywhere is stated a
 
 | Risk | Mitigation |
 |---|---|
-| **RunPod credits pending — materialised, not hypothetical** | Phases 0, 1, 2a, 3, 4 proceed locally; 2b reduced to execution. Escalate if no reply within 24h |
+| **RunPod credits pending — materialised, not hypothetical** | Phases 0, 1, 2a, 3, 4 proceed locally; 2b reduced to execution |
 | HF licence gate blocks even the offline weight-filter check | Accept immediately; instant and independent of the credits reply |
 | Gateway consumes time the graded deliverable needs | 2a completes before Phase 3 starts |
 | ~45GB image push is slow and failure-prone | Build and push from the Pod; GHCR avoids Docker Hub pull limits |
 | L40S unavailable in region | GPU fallback list; benchmark A100 80GB regardless |
+| **Volume variant pins the endpoint to one datacenter**, narrowing the GPU pool | Baked variant is the primary deliverable and has no region constraint; the volume endpoint is the comparison, not the fallback |
+| Volume variant doubles the 2b deploy work | Worker code is identical; only the weight path differs. If time runs short, the baked variant alone still satisfies the brief |
 | `diffusers` API drift | Pin exact versions; `uv.lock` committed |
 
 ## Corrections to earlier design notes
 
-1. **Weights baked into the image, not a network volume.** The brief requires it. The volume approach is the documented production evolution.
+1. **Weights baked into the image as the primary variant.** The brief requires it. Superseded in part: rather than only documenting the network-volume alternative, both are built and benchmarked — see *Why two weight-delivery variants* above.
 2. **Cost figures were wrong by ~12×.** L40S serverless is $1.75/hr, not $0.54/hr — $0.99/hr is the *Pod* rate. 1024²/28 steps is ~20-25s, not 4-6s. Every figure is now measured or labelled an estimate.
 3. **Module-level pipeline init replaced by a lazy accessor.** The original made `handler.py` unimportable without a GPU, therefore untestable.
 4. **CI does not build the image.** Standard GitHub runners have ~14GB free disk.
