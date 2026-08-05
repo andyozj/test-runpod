@@ -21,7 +21,7 @@ An honest account of what this is not. The engineering is production-*shaped*; i
 | Queue-depth visibility | `endpoint_health` logged every 2s — a log-based time series of depth and worker counts |
 | Reproducibility | Seed always echoed, model revision pinned in `contracts/`, `model_version` on every result |
 | Brief compliance | Worker returns base64 by default, so `GET /status/{job_id}` alone yields an image. Storage references are opt-in — [01](01-worker.md) |
-| Credential containment | With storage enabled, keys never leave the server; the gateway serves image bytes |
+| Cancellation | `POST /v1/jobs/{id}/cancel` delegating to RunPod's own cancel — the platform owns the queue, so only it can stop the work and the billing |
 | Deploy safety | Immutable `{version}-{sha}-{variant}` tags, one-input rollback workflow, `latest` never deployed |
 | Secret management | RunPod secrets manager, referenced as `{{ RUNPOD_SECRET_* }}`. No plaintext credential in committed config or image — [06](06-build-deploy.md#secrets) |
 | Config as code | Both endpoints declared in `deploy/endpoints/*.yaml`, applied via `saveEndpoint`. Reviewable in a diff, reconstructible after deletion |
@@ -44,7 +44,7 @@ Ranked by what would hurt first in a real deployment.
 | 7 | **Circuit breaker state is per-process** | Correct for one instance, wrong for a fleet — each replica learns the outage separately | Medium — shared state in Redis |
 | 8 | **No audit trail** | Abuse investigation and takedown rest on raw logs. `flag` verdicts are recorded but nothing consumes them | Medium — append-only audit table and a review queue |
 | 9 | **`AVG_JOB_SECONDS` is a constant** | The queue-wait estimate driving the `429` does not adapt to resolution, step count, or GPU. A 50-step 1536² job is estimated the same as a 20-step 512² one | Low — rolling p50 from completed jobs |
-| 10 | **Base64 default is bandwidth-inefficient** | A 2.7MB payload per result, re-sent on every poll of a completed job, and unusable in any pushed transport. Correct for a directly-callable endpoint, wrong at scale — where `STORAGE_ENABLED` plus presigned URLs is the answer | Low — a settings flag and one route |
+| 10 | **No object storage** | The image is returned inline: ~2.7MB per result, re-sent on every poll of a completed job, and unusable in any pushed transport. Correct for a directly-callable endpoint, wrong at scale — where an upload plus presigned URLs is the answer. Built and removed once as inert code; the right time to add it is when a caller needs a pushed result | Medium — upload path, a proxy or presign route, retention |
 | 11 | **No gateway key rotation** | A leaked gateway key is revoked by editing settings and restarting. The RunPod account key has no rotation story at all | Low — key versioning |
 | 12 | **No load test or capacity model** | Concurrency limits and the queue threshold are reasoned, not measured | Medium — a load harness and a run |
 | 13 | **No image provenance** | Output is not attributable as machine-generated | Medium — C2PA or invisible watermark |

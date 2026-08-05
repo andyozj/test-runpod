@@ -133,6 +133,34 @@ class JobService:
         """
         return await self.repository.get(job_id)
 
+    async def cancel(self, job_id: UUID) -> Job | None:
+        """Stop a job, upstream and locally.
+
+        RunPod owns the queue, so only RunPod can actually stop the work and
+        the billing. This asks it to, then records the outcome.
+
+        A job already in a terminal state is returned unchanged: terminal
+        states are written once, and cancelling a completed job must not
+        discard its result.
+
+        Args:
+            job_id: The job to cancel.
+
+        Returns:
+            The job, or None if unknown.
+        """
+        job = await self.repository.get(job_id)
+        if job is None or job.status.terminal:
+            return job
+        if job.runpod_job_id is not None:
+            await self.runpod.cancel(job.runpod_job_id)
+        return await self.repository.mark_failed(
+            job.id,
+            ErrorCode.JOB_TIMEOUT,
+            "Cancelled by the caller.",
+            JobStatus.CANCELLED,
+        )
+
     async def reconcile(self, limit: int = 50) -> int:
         """Advance unresolved jobs toward a terminal state.
 

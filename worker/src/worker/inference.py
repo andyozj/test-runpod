@@ -104,7 +104,6 @@ def generate(
 
     return GenerationResult(
         image_base64=base64.b64encode(payload).decode("ascii"),
-        storage_key=None,
         format=request.output_format,
         seed=seed,
         width=width,

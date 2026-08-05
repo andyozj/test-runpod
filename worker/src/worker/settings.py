@@ -19,9 +19,7 @@ class Settings(BaseSettings):
             baked into the image or mounted from a network volume.
         model_cache_root: HuggingFace cache hub directory, where RunPod
             pre-stages a cached model. Used only when `weights_path` is absent,
-            so one build serves all three delivery mechanisms.
-        storage_enabled: When true, upload the image and return a key instead
-            of inline base64.
+            so one build serves every delivery mechanism.
         log_level: Root log level.
     """
 
@@ -31,7 +29,6 @@ class Settings(BaseSettings):
     model_revision: str = Field(default="main", min_length=1)
     weights_path: Path = Path("/opt/weights")
     model_cache_root: Path = Path("/runpod-volume/huggingface-cache/hub")
-    storage_enabled: bool = False
     log_level: str = "INFO"
 
     @property

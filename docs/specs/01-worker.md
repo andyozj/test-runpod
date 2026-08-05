@@ -12,7 +12,6 @@ Tier 1. Runs on RunPod Serverless. This is the graded deliverable.
 | `pipeline.py` | Lazy accessor and the `ImagePipeline` protocol. |
 | `inference.py` | `generate(request, pipeline) -> GenerationResult`. Pure, injectable. |
 | `guardrails.py` | Cheap model-free prompt check. See [04](04-guardrails.md). |
-| `storage.py` | Upload to S3-compatible storage, return a reference. Base64 fallback behind the same interface. |
 | `schemas.py` | `GenerationRequest`, `GenerationResult`, error envelope. |
 | `settings.py` | `pydantic-settings`. The only module reading the environment. |
 | `errors.py` | Domain exceptions and error codes. |
@@ -91,7 +90,6 @@ Snapping is silent by design, unlike prompt truncation: the difference between 1
 ```json
 {
   "image_base64": "iVBORw0KGgoAAAANS...",
-  "storage_key": null,
   "format": "png",
   "seed": 42,
   "width": 1024, "height": 1024,
@@ -125,17 +123,6 @@ curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
 
 This works because a warm job finishes in ~20-25s and 2.7MB fits the 20MB `/runsync` cap. It needs a warm worker — a cold start would outlast the hold — which is one reason the demo window runs with an active worker. It is the demo path only; everything about async as the service interface ([00](00-overview.md#async-as-the-default)) stands.
 
-### Storage: opt-in, not default
-
-When `STORAGE_ENABLED` is set, the worker additionally uploads to a RunPod network volume via its S3-compatible API and populates `storage_key`. `image_base64` is then omitted, since the caller has a reference and a 2.7MB duplicate helps nobody.
-
-This exists because a ~200-byte result can be *pushed* and a 2.7MB blob cannot — it is unusable in an SSE event, hostile in a webhook body, and wasteful in a polling response fetched repeatedly. Keeping the capability preserves every event-driven facade in [03](03-facades.md) as a real option.
-
-But it is **off by default**, because it only works for a caller who can resolve the key: the gateway, using server-side credentials, via `GET /v1/jobs/{id}/image`. A direct caller cannot. Making the graded path depend on the ungraded tier was the wrong trade, and the default now reflects that.
-
-`storage.py` speaks S3 through a narrow interface, so Cloudflare R2 or AWS S3 is a settings change: bucket, endpoint, credentials. Objects are content-addressed and ephemeral; retention is recorded in [08](08-production-readiness.md).
-
-`model_version` pins the output to what produced it, including the resolved revision. Without it, an image cannot be correlated to a model version after the fact. The revision is pinned at build time by `fetch_weights.py` and baked in, so it is a fact rather than a label.
 
 ## Errors
 

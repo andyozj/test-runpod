@@ -182,6 +182,14 @@ class HttpRunPodClient:
             workers_idle=int(workers.get("idle", 0)),
         )
 
+    async def cancel(self, runpod_job_id: str) -> None:
+        """Stop a queued or running job.
+
+        Args:
+            runpod_job_id: The upstream identifier.
+        """
+        await self._request("POST", f"cancel/{runpod_job_id}")
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         if not self.breaker.allow(loop.time()):
@@ -235,7 +243,6 @@ def _backoff(attempt: int) -> float:
 def _result(output: dict[str, Any]) -> JobResult:
     return JobResult(
         image_base64=output.get("image_base64"),
-        storage_key=output.get("storage_key"),
         format=str(output.get("format", "png")),
         seed=int(output.get("seed", 0)),
         width=int(output.get("width", 0)),

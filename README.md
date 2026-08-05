@@ -68,7 +68,6 @@ curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
   "status": "COMPLETED",
   "output": {
     "image_base64": "iVBORw0KGgo...",
-    "storage_key": null,
     "format": "png",
     "seed": 918273,
     "width": 1024,

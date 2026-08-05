@@ -203,6 +203,14 @@ class RunPodClient(Protocol):
         """
         ...
 
+    async def cancel(self, runpod_job_id: str) -> None:
+        """Stop a queued or running job upstream.
+
+        Args:
+            runpod_job_id: The upstream identifier.
+        """
+        ...
+
 
 @runtime_checkable
 class PromptGuardrail(Protocol):

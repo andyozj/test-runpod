@@ -44,7 +44,6 @@ def test_successful_job_returns_a_decodable_image(
 
     assert output["seed"] == 42
     assert output["model_version"] == "black-forest-labs/FLUX.1-dev@0ef5fff"
-    assert output["storage_key"] is None
     decoded = base64.b64decode(str(output["image_base64"]))
     assert Image.open(io.BytesIO(decoded)).size == (1024, 1024)
 

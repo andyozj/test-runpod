@@ -122,7 +122,6 @@ class JobView(BaseModel):
             result=(
                 {
                     "image_base64": job.result.image_base64,
-                    "storage_key": job.result.storage_key,
                     "format": job.result.format,
                     "seed": job.result.seed,
                     "width": job.result.width,

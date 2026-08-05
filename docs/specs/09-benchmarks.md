@@ -110,7 +110,7 @@ Worth one row because it is the only latency anyone experiences, and because the
 
 Response payload size **matters again**, because the worker returns base64 by default ([01](01-worker.md)). Request caps are documented — 10MB for `/run`, 20MB for `/runsync` — but no ceiling is published for the `/status` response, which is the one carrying the image.
 
-Measured at 512², 1024² and 1536², PNG and JPEG. If 1536² PNG exceeds the limit, JPEG becomes the default at high resolutions — a decision this measurement exists to make. With `STORAGE_ENABLED` the question disappears, but that is not the default and so cannot be the answer.
+Measured at 512², 1024² and 1536², PNG and JPEG. If 1536² PNG exceeds the limit, JPEG becomes the default at high resolutions — a decision this measurement exists to make. Object storage would sidestep the question entirely and is not built ([08](08-production-readiness.md) gap #10), so the measurement has to settle it.
 
 ### 7. Weight delivery: baked versus network volume versus cached models
 

@@ -31,5 +31,4 @@ datacenter: US-KS-2   # must match the volume's datacenter
 
 env:
   WEIGHTS_PATH: /runpod-volume/flux   # DIFFERENCE: mounted, not baked
-  STORAGE_ENABLED: "false"
   LOG_LEVEL: INFO

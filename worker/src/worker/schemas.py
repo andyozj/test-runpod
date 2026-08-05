@@ -93,13 +93,12 @@ class GenerationRequest(BaseModel):
 class GenerationResult(BaseModel):
     """What one successful generation produced.
 
-    Exactly one of `image_base64` and `storage_key` is populated. Base64 is the
-    default because RunPod's `GET /status/{job_id}` returns the handler output
-    verbatim, so a key would be unresolvable by a direct caller.
+    The image is returned inline. RunPod's `GET /status/{job_id}` returns the
+    handler output verbatim and no custom routes can be added, so a storage
+    reference would be unresolvable by a direct caller.
 
     Attributes:
-        image_base64: The encoded image, when storage is disabled.
-        storage_key: Object key, when storage is enabled.
+        image_base64: The encoded image.
         format: Image encoding.
         seed: The seed actually used, including when randomly chosen.
         width: Rendered width.
@@ -110,8 +109,7 @@ class GenerationResult(BaseModel):
         timings: Wall-clock durations by stage, in seconds.
     """
 
-    image_base64: str | None = None
-    storage_key: str | None = None
+    image_base64: str
     format: str
     seed: int
     width: int

@@ -106,28 +106,51 @@ def test_blocked_prompt_is_a_200_job_not_an_http_error(
     assert job.json()["error"]["code"] == "PROMPT_BLOCKED"
 
 
-async def test_completed_job_exposes_its_result_and_image(
+async def test_completed_job_exposes_its_result(
     client: TestClient, service: JobService, runpod: FakeRunPodClient
 ) -> None:
     created = client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH)
     runpod.next_status = completed(seed=99)
     await service.reconcile()
 
-    job_id = created.json()["job_id"]
-    view = client.get(f"/v1/jobs/{job_id}", headers=AUTH)
-    image = client.get(f"/v1/jobs/{job_id}/image", headers=AUTH)
+    view = client.get(f"/v1/jobs/{created.json()['job_id']}", headers=AUTH)
 
     assert view.json()["status"] == "COMPLETED"
     assert view.json()["result"]["seed"] == 99
-    assert image.status_code == 200
-    assert image.headers["content-type"] == "image/png"
-    assert image.content == base64.b64decode("aGVsbG8=")
+    assert base64.b64decode(view.json()["result"]["image_base64"])
 
 
-def test_image_route_404s_before_completion(client: TestClient) -> None:
+def test_cancel_stops_the_job_upstream(
+    client: TestClient, runpod: FakeRunPodClient
+) -> None:
     created = client.post("/v1/jobs", json={"prompt": "x"}, headers=AUTH)
+    job_id = created.json()["job_id"]
 
-    response = client.get(f"/v1/jobs/{created.json()['job_id']}/image", headers=AUTH)
+    response = client.post(f"/v1/jobs/{job_id}/cancel", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "CANCELLED"
+    assert runpod.cancelled == ["runpod-1"]
+
+
+async def test_cancelling_a_completed_job_keeps_its_result(
+    client: TestClient, service: JobService, runpod: FakeRunPodClient
+) -> None:
+    created = client.post("/v1/jobs", json={"prompt": "x"}, headers=AUTH)
+    runpod.next_status = completed()
+    await service.reconcile()
+    job_id = created.json()["job_id"]
+
+    response = client.post(f"/v1/jobs/{job_id}/cancel", headers=AUTH)
+
+    assert response.json()["status"] == "COMPLETED"
+    assert runpod.cancelled == []
+
+
+def test_cancelling_an_unknown_job_is_404(client: TestClient) -> None:
+    response = client.post(
+        "/v1/jobs/00000000-0000-0000-0000-000000000000/cancel", headers=AUTH
+    )
 
     assert response.status_code == 404
 

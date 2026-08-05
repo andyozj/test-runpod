@@ -173,8 +173,7 @@ class JobResult:
     """What the worker produced.
 
     Attributes:
-        image_base64: The encoded image, when storage is disabled.
-        storage_key: Object key, when storage is enabled.
+        image_base64: The encoded image.
         format: Image encoding.
         seed: The seed actually used.
         width: Rendered width.
@@ -184,7 +183,6 @@ class JobResult:
     """
 
     image_base64: str | None
-    storage_key: str | None
     format: str
     seed: int
     width: int

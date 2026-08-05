@@ -33,6 +33,7 @@ class FakeRunPodClient:
     """Records submissions; returns scripted statuses."""
 
     submissions: list[dict[str, Any]] = field(default_factory=list)
+    cancelled: list[str] = field(default_factory=list)
     next_status: RunPodJobStatus | None = None
     health_value: EndpointHealth | None = None
     submit_raises: Exception | None = None
@@ -51,6 +52,9 @@ class FakeRunPodClient:
         if self.status_raises is not None:
             raise self.status_raises
         return self.next_status or RunPodJobStatus(status=JobStatus.IN_PROGRESS)
+
+    async def cancel(self, runpod_job_id: str) -> None:
+        self.cancelled.append(runpod_job_id)
 
     async def health(self) -> EndpointHealth:
         if self.health_raises is not None:
@@ -80,7 +84,6 @@ def completed(seed: int = 42) -> RunPodJobStatus:
         status=JobStatus.COMPLETED,
         result=JobResult(
             image_base64="aGVsbG8=",
-            storage_key=None,
             format="png",
             seed=seed,
             width=1024,

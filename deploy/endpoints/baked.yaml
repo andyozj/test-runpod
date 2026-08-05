@@ -36,7 +36,6 @@ datacenter: null
 
 env:
   WEIGHTS_PATH: /opt/weights
-  STORAGE_ENABLED: "false"
   LOG_LEVEL: INFO
   # Secrets are references, never values — this file is committed.
   # HF_TOKEN is a build-time BuildKit secret and is not needed at runtime.

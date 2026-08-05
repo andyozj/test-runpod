@@ -153,43 +153,6 @@ Compose must work on a clean clone with two environment variables and one comman
 
 The production path is documented rather than performed: container image, managed Postgres, secrets from the platform's store, the reconciler as a separate process so gateway replicas do not each poll, and the shared circuit-breaker state that becomes necessary the moment there is more than one replica.
 
-## Image storage
-
-The worker writes generated images to a RunPod network volume through its S3-compatible API:
-
-```
-endpoint: https://s3api-{DATACENTER}.runpod.io/
-bucket:   {network-volume-id}
-```
-
-Supported operations cover what is needed — `PutObject`, `GetObject`, `HeadObject`, and multipart upload.
-
-### Two constraints that shape the design
-
-**Region.** The S3-compatible API exists only in `EUR-IS-1`, `EU-RO-1`, `EU-CZ-1`, `US-KS-2`, and `US-CA-2`. Combined with the volume weights variant pinning a datacenter for its own reasons, this constrains GPU availability twice over. The baked variant must therefore use a storage volume in a region it can also get GPUs in, and the chosen datacenter is recorded in the runbook rather than left implicit.
-
-**The URL is not publicly fetchable.** It is an authenticated S3 endpoint. Returning it directly to a client would hand them a URL they cannot open without credentials — which defeats the point of returning a reference at all.
-
-### The gateway proxies image bytes
-
-The worker returns a storage **key**, not a URL. The gateway exposes:
-
-```
-GET /v1/jobs/{id}/image      → 302 or streamed bytes
-```
-
-and resolves the key against storage using server-side credentials.
-
-| Property | Consequence |
-|---|---|
-| Storage credentials never leave the server | No secret is handed to a client, ever |
-| The client sees a normal URL under our own auth | Works in a browser, in `curl`, in an `<img>` tag |
-| Backend is swappable | RunPod storage, R2, or S3 behind one route, invisible to callers |
-| Job responses stay small | A key is a short string, so everything in [03](03-facades.md) about pushability holds |
-
-The cost is that image bytes traverse the gateway. At this scale that is nothing; at scale the answer is presigned URLs, which is a change to one route and no callers.
-
-Configuring the worker with S3 credentials is done through RunPod's environment settings, not `s3Config` in the job payload — the SDK supports per-request credentials, but that would mean every caller holding storage keys, which is the problem this design exists to avoid.
 
 ## Endpoint configuration as code
 

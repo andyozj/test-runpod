@@ -83,7 +83,6 @@ Completed:
   "progress": {"step": 28, "total": 28, "percent": 100},
   "result": {
     "image_base64": "iVBORw0KGgoAAAANS...",
-    "image_url": null,
     "format": "png",
     "seed": 918273,
     "width": 1024, "height": 1024,
@@ -117,13 +116,14 @@ Failed or blocked:
 
 Poll guidance, published in the API docs: **every 2s**, backing off to 5s after 60s, giving up at the 600s job deadline. Undocumented polling guidance produces either hammering or sluggish clients.
 
-### `GET /v1/jobs/{id}/image`
+### `POST /v1/jobs/{id}/cancel`
 
-Streams the generated image. `200` with the bytes and the correct `Content-Type`; `404` if the job is unknown or has no result yet.
+Stops a queued or running job and returns it in `CANCELLED`.
 
-Serves whichever form the result carries: decoding `image_base64`, or resolving `storage_key` against storage with server-side credentials when storage is enabled ([01](01-worker.md#storage-opt-in-not-default)).
-
-The route exists so a caller has one stable way to obtain an image regardless of which the worker produced, and so that an authenticated S3 URL is never handed to a client who cannot open it. When storage is on, `image_url` on the result points here.
+Delegates to RunPod's own `POST /v2/{endpoint}/cancel/{id}` rather than
+reimplementing it. The platform owns the queue, so it is the only thing that
+can actually stop the work — and stop the billing. A job already terminal is
+returned unchanged: cancelling a completed job must not discard its result.
 
 ### `GET /health`, `GET /health/detailed`
 
@@ -183,15 +183,22 @@ The protocol boundary in [02](02-gateway-core.md) makes each an addition rather 
 | **MCP** | None — the client is an agent framework and the tool schema is the contract | Agent-native call with zero glue | A thin wrapper over the async API. Cheap to add; out of scope |
 | **gRPC** | Codegen and a toolchain | Efficient streaming, typed contract | No consumer asking for it |
 
-## Why the result shape decides which facades are possible
+## The result is the image, not a reference
 
-A ~200-byte reference can be pushed: it fits in an SSE event, a webhook body, a WebSocket frame, an MCP tool result. A 2.7MB base64 blob fits in none of them comfortably, and a client polling every 2s would re-download it on every call until the job finished.
+The worker returns base64 inline ([01](01-worker.md)). No storage backend, no
+reference, no proxy route.
 
-So the decision about which transports are *available* is made in the worker's serialisation, in the place least visible to whoever later wants to add streaming.
+An earlier revision returned a storage key on the grounds that a ~200-byte
+result can be pushed over SSE or a webhook while a 2.7MB blob cannot. That
+argument is sound and it was the wrong trade here: RunPod's job surface is
+fixed, `GET /status/{job_id}` returns the handler's output verbatim, and a key
+is unresolvable by anyone not running the gateway. It made the graded tier
+depend on the ungraded one.
 
-**The worker nevertheless returns base64 by default**, because RunPod serverless has a fixed route surface and `GET /status/{job_id}` returns the handler's output verbatim ([01](01-worker.md)). A storage key there would hand a direct caller something unresolvable, and the graded tier cannot depend on the ungraded one being run.
+Object storage is the right answer at a scale this does not operate at, and it
+is recorded as an extension in [08](08-production-readiness.md) rather than
+built and left inert.
 
-Setting `STORAGE_ENABLED` switches to references and unlocks the table above. That is the correct default for a deployment with the gateway in front of it, and the wrong one for an endpoint a reviewer calls directly — so it is configuration, not architecture.
 
 ## Why the boundary makes this cheap
 

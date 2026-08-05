@@ -55,7 +55,6 @@ class RequestContext:
 class JobResult:
     """What the worker produced, as stored on a completed job."""
     image_base64: str | None
-    storage_key: str | None
     format: str
     seed: int
     width: int
@@ -207,6 +206,8 @@ Breaker state is per-process and in-memory. That is correct for a single instanc
 
 Nothing tells us when a job finishes — webhooks are documented-not-built ([03](03-facades.md)), so the only way to learn an outcome is to ask. The reconciler asks.
 
+**What this adds over RunPod's own queue is narrower than it looks, and worth stating precisely.** RunPod already queues, tracks status, retries, and serves results. It does exactly two things we need and it does not do: it **deletes results 30 minutes after completion**, and it has no notion of *which caller* a job belonged to. Durability past that window, and attribution, are the whole justification for a job store. Everything else here is the platform's work, not ours.
+
 It is a distinct hop from the async facade. The client polls *us*; the reconciler polls *RunPod*. Neither is aware of the other, and the client would poll identically if we learned the result by webhook instead.
 
 ```
@@ -305,7 +306,7 @@ Two honest caveats about that number. `capacity` counts a *running* worker as av
 
 Rejecting on estimated time rather than raw depth means the threshold survives a change to `max_workers`, and it makes `Retry-After` a real number rather than a guess. `AVG_JOB_SECONDS` starts at a stated estimate and is replaced by the measured p50 from [09](09-benchmarks.md).
 
-The alternative — accept everything — is worse than it looks. A client whose job sits queued for six minutes and then times out has learned nothing, consumed a queue slot, and will very likely retry. Rejecting immediately lets it back off, and keeps the queue bounded.
+**This protects the cost ceiling, not latency.** RunPod already autoscales on queue delay, so below `max_workers` a deep queue resolves itself by adding a worker and shedding would only turn away work the platform was about to absorb. The `429` earns its place at the ceiling: once `max_workers` is reached nothing more is coming, and a client whose job then sits queued for six minutes before timing out has learned nothing, consumed a slot, and will very likely retry.
 
 ### Refreshed on the reconciler tick, not per request
 

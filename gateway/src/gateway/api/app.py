@@ -175,40 +175,28 @@ def build_router(deps: Deps) -> APIRouter:
             raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
         return JobView.of(job)
 
-    @router.get("/jobs/{job_id}/image")
-    async def get_image(
+    @router.post("/jobs/{job_id}/cancel")
+    async def cancel_job(
         job_id: UUID, authorization: str | None = Header(default=None)
-    ) -> Response:
-        """Stream the generated image.
+    ) -> JobView:
+        """Stop a queued or running job.
 
-        One stable way to obtain bytes regardless of whether the worker
-        returned base64 or a storage key.
+        Delegates to RunPod's own cancel operation rather than reimplementing
+        it — the platform owns the queue, so it is the only thing that can
+        actually stop the work and stop the billing.
 
         Args:
-            job_id: The job to read.
+            job_id: The job to cancel.
             authorization: Bearer credential.
 
         Returns:
-            The image bytes with the correct content type.
+            The job in its cancelled state.
         """
-        import base64
-
         _authenticate(authorization)
-        job = await deps.service.get(job_id)
-        if job is None or job.result is None:
-            raise _error(
-                404, ErrorCode.JOB_NOT_FOUND, "No completed result for that job."
-            )
-        if job.result.image_base64 is None:
-            raise _error(
-                404,
-                ErrorCode.JOB_NOT_FOUND,
-                "Result carries a storage key; object storage is not configured.",
-            )
-        return Response(
-            content=base64.b64decode(job.result.image_base64),
-            media_type=f"image/{job.result.format}",
-        )
+        job = await deps.service.cancel(job_id)
+        if job is None:
+            raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
+        return JobView.of(job)
 
     return router
 

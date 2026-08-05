@@ -42,7 +42,6 @@ env:
   # Deliberately unset so the worker falls through to MODEL_CACHE_ROOT.
   # WEIGHTS_PATH: unset
   MODEL_CACHE_ROOT: /runpod-volume/huggingface-cache/hub
-  STORAGE_ENABLED: "false"
   LOG_LEVEL: INFO
   # Belt and braces per RunPod's docs: even though the pipeline already passes
   # local_files_only=True, these stop any library reaching for the network at
