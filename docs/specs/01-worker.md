@@ -111,11 +111,13 @@ Exactly one of `image_url` and `image_base64` is populated. Base64 remains as th
 
 ### Storage backend
 
-RunPod S3-compatible network volume storage.
+RunPod network volume via its S3-compatible API ([06](06-build-deploy.md#image-storage)). One platform, no extra vendor, no cross-cloud egress, and it shares infrastructure with the volume weights variant.
 
-Chosen because it keeps everything on one platform — no additional vendor, no extra signup, no cross-cloud egress — and because a network volume is already being provisioned for the deployment variant in [06](06-build-deploy.md), so the storage story and the weights story share one piece of infrastructure.
+**The worker returns a storage key, not a public URL.** The RunPod S3 endpoint is authenticated, so a raw URL would be unopenable by any client that does not hold storage credentials. The gateway resolves the key through `GET /v1/jobs/{id}/image` using server-side credentials, so callers get a usable URL and no secret ever leaves the server.
 
-The cost is the same region pinning the volume variant carries. `storage.py` speaks the S3 API through a narrow interface, so swapping to Cloudflare R2 or S3 is a settings change: bucket, endpoint, credentials.
+`image_url` in the response above is that gateway route, assembled from the key. The field name reflects what the caller receives.
+
+`storage.py` speaks S3 through a narrow interface, so Cloudflare R2 or AWS S3 is a settings change: bucket, endpoint, credentials.
 
 Objects are written under a content-addressed key and treated as ephemeral. Retention policy is out of scope and recorded in [08](08-production-readiness.md).
 

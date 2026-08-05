@@ -23,6 +23,53 @@ The repository ships the `diffusers` sharded layout **and** standalone `flux1-de
 
 **Verified offline in Phase 2a.** `HfApi().list_repo_files()` returns the file list without downloading anything, so the filter is asserted against the real manifest for the cost of one API call. Discovering this on a running Pod costs an hour and a re-push.
 
+## Revision pinning
+
+FLUX.1-dev has no `stable` tag — HuggingFace offers `main` and commit SHAs. Building against `main` means two builds a week apart can differ silently while both claim to be the same model.
+
+So the SHA is resolved once and committed:
+
+```
+contracts/model-revision.txt      # e.g. 0ef5fff789c832c5c7f4e127f94c8b54bbcced44
+```
+
+`fetch_weights.py --revision $(cat contracts/model-revision.txt)` for every build. Updating the model is a commit that changes one file and is visible in review, rather than a silent consequence of building on a different day.
+
+This is what makes `model_version` in the worker's response ([01](01-worker.md)) a fact rather than a label.
+
+### The volume variant must prove what it holds
+
+A baked image knows its weights — it downloaded them during its own build. A mounted volume could contain anything: populated once, weeks earlier, possibly from a different revision.
+
+If the two variants run different weights, the baked-versus-volume comparison in [09](09-benchmarks.md) measures two variables at once and concludes nothing.
+
+So population writes a manifest to the volume root:
+
+```json
+{"repo": "black-forest-labs/FLUX.1-dev",
+ "revision": "0ef5fff...",
+ "files": 23,
+ "bytes": 33071284736,
+ "populated_at": "2026-08-05T12:04:00Z"}
+```
+
+Startup reads it and fails fast on a mismatch with `contracts/model-revision.txt`. A wrong-revision volume is then a refusal to start rather than a benchmark run that quietly compares two different models.
+
+## Image tags
+
+```
+ghcr.io/<owner>/flux-worker:{version}-{short-sha}-{variant}
+
+ghcr.io/<owner>/flux-worker:0.1.0-a3f21c8-baked
+ghcr.io/<owner>/flux-worker:0.1.0-a3f21c8-volume
+```
+
+Version for humans, short SHA so two builds of one version are distinguishable, variant because both must coexist in the registry and be deployed to separate endpoints.
+
+The `{version}-{short-sha}` prefix is the same string `/health` reports ([05](05-observability.md)), so a running endpoint identifies its own image without cross-referencing anything.
+
+Immutable. Never `latest` ([`STANDARDS.md`](../../STANDARDS.md) §11).
+
 ## Layer order
 
 Ordered by rate of change, slowest first:
@@ -106,9 +153,57 @@ Compose must work on a clean clone with two environment variables and one comman
 
 The production path is documented rather than performed: container image, managed Postgres, secrets from the platform's store, the reconciler as a separate process so gateway replicas do not each poll, and the shared circuit-breaker state that becomes necessary the moment there is more than one replica.
 
+## Image storage
+
+The worker writes generated images to a RunPod network volume through its S3-compatible API:
+
+```
+endpoint: https://s3api-{DATACENTER}.runpod.io/
+bucket:   {network-volume-id}
+```
+
+Supported operations cover what is needed — `PutObject`, `GetObject`, `HeadObject`, and multipart upload.
+
+### Two constraints that shape the design
+
+**Region.** The S3-compatible API exists only in `EUR-IS-1`, `EU-RO-1`, `EU-CZ-1`, `US-KS-2`, and `US-CA-2`. Combined with the volume weights variant pinning a datacenter for its own reasons, this constrains GPU availability twice over. The baked variant must therefore use a storage volume in a region it can also get GPUs in, and the chosen datacenter is recorded in the runbook rather than left implicit.
+
+**The URL is not publicly fetchable.** It is an authenticated S3 endpoint. Returning it directly to a client would hand them a URL they cannot open without credentials — which defeats the point of returning a reference at all.
+
+### The gateway proxies image bytes
+
+The worker returns a storage **key**, not a URL. The gateway exposes:
+
+```
+GET /v1/jobs/{id}/image      → 302 or streamed bytes
+```
+
+and resolves the key against storage using server-side credentials.
+
+| Property | Consequence |
+|---|---|
+| Storage credentials never leave the server | No secret is handed to a client, ever |
+| The client sees a normal URL under our own auth | Works in a browser, in `curl`, in an `<img>` tag |
+| Backend is swappable | RunPod storage, R2, or S3 behind one route, invisible to callers |
+| Job responses stay small | A key is a short string, so everything in [03](03-facades.md) about pushability holds |
+
+The cost is that image bytes traverse the gateway. At this scale that is nothing; at scale the answer is presigned URLs, which is a change to one route and no callers.
+
+Configuring the worker with S3 credentials is done through RunPod's environment settings, not `s3Config` in the job payload — the SDK supports per-request credentials, but that would mean every caller holding storage keys, which is the problem this design exists to avoid.
+
+## Endpoint creation
+
+Created through the RunPod console, with **every value recorded in `RUNBOOK.md`**.
+
+The alternative is the REST API or `runpodctl`, which is reproducible, diffable, and recreatable. That is the better answer for anything long-lived, and it is not chosen here: two endpoints created once do not justify the configuration-as-code machinery, and the runbook keeps the settings in the repository where they can be reviewed.
+
+The point of recording every value is that the console is not the source of truth. "Why is the idle timeout 60s?" must be answerable from the repository, and an endpoint deleted by accident must be reconstructible without archaeology.
+
+Stated as a deliberate trade rather than left as an omission.
+
 ## Configuration
 
-Runtime configuration reaches the endpoint through RunPod's environment settings, never baked into the image: `RUNPOD_API_KEY` is not needed by the worker, but bucket credentials, guardrail settings, and log level are.
+Runtime configuration reaches the endpoint through RunPod's environment settings, never baked into the image: `RUNPOD_API_KEY` is not needed by the worker, but S3 credentials, `WEIGHTS_PATH`, guardrail settings, and log level are.
 
 `.env.example` is committed listing every variable with a description and no value. `.env` is git-ignored.
 
@@ -118,10 +213,14 @@ Everything below is doable now, with no credits and no GPU:
 
 - [ ] `fetch_weights.py` written; `ignore_patterns` asserted against `list_repo_files()`
 - [ ] `HF_TOKEN` verified against the gated repo
-- [ ] `Dockerfile` written, layer order correct, secret mount correct
-- [ ] `.dockerignore` excludes tests, docs, `.git`
+- [ ] Model revision resolved and committed to `contracts/model-revision.txt`
+- [ ] `Dockerfile` written, layer order correct, secret mount correct, `BAKE_WEIGHTS` arg working
+- [ ] `.dockerignore` excludes `tests/`, `docs/`, `.git`, `.venv`, `__pycache__`
+- [ ] Volume manifest format defined; startup revision check written and unit-tested
+- [ ] Storage client written against a fake S3; datacenter chosen from the five that support the S3 API
+- [ ] Gateway image-proxy route written and tested against a fake storage backend
 - [ ] Benchmark harness written and running against a fake pipeline
-- [ ] `RUNBOOK.md` written end to end
+- [ ] `RUNBOOK.md` written end to end, including volume population and both endpoint configurations
 - [ ] Endpoint configuration recorded as values, ready to enter
 
 When credits land, 2b is execution with no decisions left in it.

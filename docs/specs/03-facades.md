@@ -117,6 +117,14 @@ Failed or blocked:
 
 Poll guidance, published in the API docs: **every 2s**, backing off to 5s after 60s, giving up at the 600s job deadline. Undocumented polling guidance produces either hammering or sluggish clients.
 
+### `GET /v1/jobs/{id}/image`
+
+Streams the generated image, resolving the worker's storage key with server-side credentials.
+
+`200` with the image bytes and the correct `Content-Type`; `404` if the job is unknown or has no result yet.
+
+This route exists because the storage backend is authenticated ([06](06-build-deploy.md#image-storage)). Handing a caller a raw S3 URL would hand them something they cannot open, and handing them credentials to fix that would be worse. The job response therefore carries a short reference — preserving everything in *Why the result shape decides which facades are possible* below — and this route turns it into bytes.
+
 ### `GET /health`, `GET /health/detailed`
 
 See [05](05-observability.md).
