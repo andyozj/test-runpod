@@ -860,8 +860,14 @@ def main() -> int:
         print(f"== {name}")
         sections[name](api, cfg, done)
 
-    REPORT_PATH.write_text(render(cfg, args.tag))
-    print(f"rendered {REPORT_PATH}")
+    if set(requested) >= set(SECTIONS):
+        REPORT_PATH.write_text(render(cfg, args.tag))
+        print(f"rendered {REPORT_PATH}")
+    else:
+        print(
+            f"partial run (--only {args.only}); not rendering {REPORT_PATH} — "
+            f"run the full section set ({','.join(SECTIONS)}) to regenerate it"
+        )
     return 0
 
 
