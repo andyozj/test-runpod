@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import os
 import sys
 import time
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover - the message is the whole point
     raise SystemExit(2) from None
 
 SYNC_TIMEOUT_S = 300
+ASYNC_TIMEOUT_S = 900
 POLL_INTERVAL_S = 2
 
 
@@ -68,7 +70,14 @@ def save(output: dict[str, Any], out: Path, observed_s: float) -> int:
     """
     if "error" in output:
         error = output["error"]
-        print(f"{error['code']}: {error['message']}", file=sys.stderr)
+        if isinstance(error, str):
+            # The worker JSON-encodes the envelope because the platform
+            # forwards only string errors.
+            try:
+                error = json.loads(error)
+            except ValueError:
+                error = {"code": "ERROR", "message": error}
+        print(f"{error.get('code', 'ERROR')}: {error.get('message')}", file=sys.stderr)
         if error.get("suggestion"):
             print(f"  {error['suggestion']}", file=sys.stderr)
         return 1
@@ -110,18 +119,28 @@ def run_async(endpoint: runpod.Endpoint, payload: dict[str, Any]) -> Any:
     print(f"job {job.job_id}", file=sys.stderr)
 
     last = ""
+    deadline = time.monotonic() + ASYNC_TIMEOUT_S
     while (status := job.status()) not in {
         "COMPLETED",
         "FAILED",
         "CANCELLED",
         "TIMED_OUT",
     }:
+        if time.monotonic() >= deadline:
+            print(f"  gave up after {ASYNC_TIMEOUT_S}s ({status})", file=sys.stderr)
+            return None
         if status != last:
             print(f"  {status}", file=sys.stderr)
             last = status
         time.sleep(POLL_INTERVAL_S)
 
     print(f"  {status}", file=sys.stderr)
+    if status != "COMPLETED":
+        # output() is None for failed jobs; the structured envelope rides the
+        # record's error field. Same private accessor the e2e suite uses —
+        # the SDK exposes no public one.
+        record = job._fetch_job()  # noqa: SLF001
+        return {"error": record.get("error", status)}
     return job.output()
 
 
@@ -159,12 +178,12 @@ def main() -> int:
     output = run_sync(endpoint, payload) if args.sync else run_async(endpoint, payload)
     observed_s = time.monotonic() - started
 
-    if not isinstance(output, dict) or "image_base64" not in output:
-        # run_sync returns a status dict rather than the output when the wait
-        # expires — a cold worker loading 33GB will do exactly that.
-        print(f"no image returned: {output}", file=sys.stderr)
-        return 1
-    return save(output, args.out, observed_s)
+    if isinstance(output, dict) and ("error" in output or "image_base64" in output):
+        return save(output, args.out, observed_s)
+    # run_sync returns a status dict rather than the output when the wait
+    # expires — a cold worker loading 33GB will do exactly that.
+    print(f"no image returned: {output}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
