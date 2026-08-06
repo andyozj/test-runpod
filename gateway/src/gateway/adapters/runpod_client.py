@@ -155,8 +155,6 @@ class HttpRunPodClient:
         status = map_status(str(body.get("status", "")))
         output = body.get("output") or {}
 
-        # The worker JSON-encodes its envelope into the platform's error
-        # string; older shapes carried a dict in output. Both decode here.
         raw_error = body.get(
             "error", output.get("error") if isinstance(output, dict) else None
         )

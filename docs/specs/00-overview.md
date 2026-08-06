@@ -67,7 +67,7 @@ The deployed endpoint nevertheless uses **cached models**: RunPod pre-stages the
 | Build and push | 30-60 min, and may exceed registry layer caps | Minutes |
 | Storage cost | Registry only | **None** |
 | Weight transfer | Billed at build | **Unbilled, pre-staged** |
-| Maturity | Stable | **Beta** |
+| Maturity | Stable | **Shipped 2026-08** — no beta label; two documented limits (one model per endpoint; all quantizations stage together) |
 
 Stating the deviation rather than hiding it. Staging pulls the *whole* repository, so the ~24GB of duplicate single-file weights come along — unbilled and not our disk, but the reason scale-up is measured rather than assumed.
 
@@ -129,7 +129,7 @@ Until 2b runs, `BENCHMARKS.md` does not exist and no figure anywhere is stated a
 | Gateway consumes time the graded deliverable needs | 2a completes before Phase 3 starts |
 | ~45GB image push is slow and failure-prone | Build and push from the Pod; GHCR avoids Docker Hub pull limits |
 | L40S unavailable in region | GPU fallback list; benchmark A100 80GB regardless |
-| Cached models is beta | The baked image is the fallback and is already a build target; switching is a tag and a config change |
+| Model store is newly shipped (2026-08) | The baked image is the fallback and is already a build target; switching is a tag and a config change |
 | `diffusers` API drift | Pin exact versions; `uv.lock` committed |
 
 ## Corrections to earlier design notes

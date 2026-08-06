@@ -86,7 +86,7 @@ Both are built from one image definition. The worker code is identical; `weights
 
 **The resolver refuses a revision mismatch.** RunPod's own example sorts the available snapshots and takes the first, which would run a model the response then reports as the pinned revision — misattributing every image and silently invalidating any comparison between endpoints. Ours starts only if the pinned revision is present, and names what it found instead.
 
-Beta. The fallback is the baked image, already a build target — a tag and a config change, no new infrastructure.
+Recently shipped — RunPod's "model store", engineering write-up 2026-08-04; the docs carry no beta label. Its real caveats: one cached model per endpoint, whole-repo staging (all quantizations), and **console-only configuration** — the Model field has no REST API surface yet. The fallback is the baked image, already a build target — a tag and a config change, no new infrastructure.
 
 ```dockerfile
 ARG BAKE_WEIGHTS=true

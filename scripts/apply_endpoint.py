@@ -260,8 +260,7 @@ def apply(config: dict[str, Any], tag: str, api_key: str, dry_run: bool) -> int:
 
     template_id = find_by_name("templates", tmpl["name"], api_key)
     if template_id:
-        # PATCH rejects `isServerless` — the create schema and the update
-        # schema differ, and serverlessness is immutable after creation.
+        # PATCH's schema rejects isServerless: immutable after creation.
         patch = {k: v for k, v in tmpl.items() if k != "isServerless"}
         _request("PATCH", f"/templates/{template_id}", api_key, patch)
         print(f"template updated  {tmpl['name']}  {template_id}")
@@ -273,8 +272,7 @@ def apply(config: dict[str, Any], tag: str, api_key: str, dry_run: bool) -> int:
     endpoint_id = find_by_name("endpoints", config["name"], api_key)
     body = endpoint_body(config, template_id, endpoint_id)
     if endpoint_id:
-        # PATCH's schema excludes what cannot change: the id lives in the URL
-        # and computeType is immutable after creation.
+        # PATCH's schema rejects id (in the URL) and computeType (immutable).
         patch = {k: v for k, v in body.items() if k not in {"id", "computeType"}}
         _request("PATCH", f"/endpoints/{endpoint_id}", api_key, patch)
         print(f"endpoint updated  {config['name']}  {endpoint_id}")

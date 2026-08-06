@@ -9,6 +9,7 @@ Update on every deploy. **A rollback that begins with "work out which tag was go
 | Date | Endpoint | Tag | Previous (rollback target) | Notes |
 |---|---|---|---|---|
 | 2026-08-06 | `flux-worker-cached` (`7jrg4nu4b47fsv`) | `0.1.0-44c9643-slim` | — (first deploy) | Image digest `bfc09415c350`. Cached model + HF token set in console post-create |
+| 2026-08-06 | `flux-worker-cached` (`7jrg4nu4b47fsv`) | `0.1.0-72e537d-slim` | `0.1.0-44c9643-slim` | Error envelopes JSON-encoded; GPU list narrowed to L40S only. 7/7 e2e green post-roll |
 
 ## Prerequisites
 
@@ -117,6 +118,7 @@ Ordered by how often each is actually the cause.
 |---|---|---|
 | All workers `unhealthy`, system log ends at `worker is ready`, container log empty | Model field not set — the container crashed at warm-up before the SDK attached, and cold-start output is not always surfaced | Reproduce locally: `docker run --rm --platform linux/amd64 $IMAGE:$TAG-slim python -m worker.handler` prints exactly what the worker would have — the resolver traceback names the missing mechanism (2026-08-06: this was the cause) |
 | System log: `error pulling image ... unauthorized` | GHCR package still private — the default, even in a public account | The anonymous-pull check above; package settings, not repo settings |
+| New release deployed, behaviour unchanged | **FlashBoot workers do not drain on release** — resumed workers keep serving the old image indefinitely | Bounce `workersMax` to 0, wait ~20s, restore. Submissions 409 briefly during the transition (2026-08-06: cost an hour of "the fix didn't work") |
 | Worker starts and dies immediately | Image built for arm64 | `docker inspect $IMAGE:$TAG-slim \| grep Architecture` — must be `amd64` |
 | Every job fails at startup | Weights not found, or cache holds a different revision | Worker logs — `weights_resolved` on success; otherwise a message naming all three mechanisms |
 | Refuses to start, revision mismatch | Cache staged a snapshot other than the pinned one | Reconcile `contracts/model-revision.txt` with what the message reports |

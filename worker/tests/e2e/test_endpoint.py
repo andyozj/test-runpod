@@ -131,7 +131,7 @@ def test_progress_is_visible_mid_generation() -> None:
 
     assert job.output() is not None
     assert percents == sorted(percents)
-    assert len(set(percents)) >= 2  # throttling still yields updates at 50 steps
+    assert len(set(percents)) >= 2
 
 
 def test_blocked_prompt_returns_prompt_blocked() -> None:
@@ -173,4 +173,4 @@ def test_invalid_input_costs_no_gpu_time() -> None:
 
     assert record["status"] == "FAILED"
     assert _error_envelope(record)["code"] == "INVALID_PROMPT"
-    assert elapsed < 60  # rejected before the pipeline, not after an inference
+    assert elapsed < 60

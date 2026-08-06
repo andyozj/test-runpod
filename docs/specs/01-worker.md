@@ -128,6 +128,8 @@ This works because a warm job finishes in ~20-25s and 2.7MB fits the 20MB `/runs
 
 Codes are defined in [02](02-gateway-core.md#error-codes) and shared across tiers.
 
+**The envelope travels as a JSON string in the job's `error` field.** The SDK pops an `error` key from the handler's return and forwards it, but the platform carries error only as a string — a dict there is silently dropped, leaving a `COMPLETED` job with no output at all. Discovered by the live e2e suite (2026-08-06), which is the class of bug only e2e can find. So `WorkerError.job_output()` JSON-encodes the envelope; callers decode `error` to recover code, message and suggestion; the job reports `FAILED`. The gateway adapter decodes string or dict and treats an undecodable error as message-only rather than raising — a malformed error must never mask the failure it reports.
+
 `torch.cuda.OutOfMemoryError` is caught explicitly: log with context, `torch.cuda.empty_cache()`, return the envelope with `refresh_worker: True`. VRAM fragmentation outlives `empty_cache()`, so the worker is retired rather than trusted with the next job.
 
 Any other pipeline exception maps to `INFERENCE_FAILED` with the detail logged and not returned.

@@ -116,13 +116,14 @@ Only `prompt` is required.
 
 ## Errors
 
-A failed job is still HTTP `200` — the call succeeded, the job didn't. The outcome is in the body:
+A rejected or failed job reports `"status": "FAILED"`, and the structured envelope arrives **JSON-encoded inside the platform's `error` string** — decode it to get code, message and suggestion:
 
 ```json
-{"error": {"code": "PROMPT_BLOCKED",
-           "message": "Prompt matched a blocked term.",
-           "suggestion": "Rephrase the prompt and resubmit."}}
+{"status": "FAILED",
+ "error": "{\"code\": \"PROMPT_BLOCKED\", \"message\": \"Prompt matched a blocked term.\", \"suggestion\": \"Rephrase the prompt and resubmit.\"}"}
 ```
+
+The encoding is forced by the platform: RunPod carries a job's error only as a string, and a dict returned there is silently dropped — the caller would see a completed job with no output at all. Found by the e2e suite against the live endpoint; the string round-trip preserves the envelope for humans and agents alike.
 
 | Code | Meaning |
 |---|---|
@@ -171,7 +172,7 @@ The brief says *"Build a Docker image that includes your serverless handler and 
 | Build and push | 30-60 min, and may exceed registry layer caps | Minutes |
 | Storage cost | Registry only | **None** |
 | Weight transfer | Billed at build | **Unbilled, pre-staged** |
-| Maturity | Stable | **Beta** |
+| Maturity | Stable | **Shipped 2026-08** — no beta label; limits: one model per endpoint, all quantizations stage together |
 
 A deliberate deviation, stated rather than hidden. Staging pulls the whole repo, so the ~24GB of duplicate single-file weights come along — unbilled, and not our disk.
 

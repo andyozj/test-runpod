@@ -95,7 +95,7 @@ def test_progress_reporting_is_throttled_to_stride() -> None:
             reported.append(step)
 
     assert len(reported) <= 100 // handler_module.PROGRESS_STRIDE_PCT + 1
-    assert reported[0] == 1  # pollers must see life before the first stride
+    assert reported[0] == 1
     assert reported[-1] == 28
 
 

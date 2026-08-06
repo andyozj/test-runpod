@@ -1,7 +1,7 @@
 # Baked-weights endpoint. Documented fallback, not deployed: the image
 # contains the handler and the model, which is the artefact the brief names.
 #
-# Also the fallback if cached models (beta) misbehaves — a different tag and
+# Also the fallback if the model store misbehaves — a different tag and
 # this file, with no infrastructure to provision.
 #
 # Applied with:
