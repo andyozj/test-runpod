@@ -19,6 +19,14 @@ from worker.schemas import GenerationRequest
 from worker.settings import Settings
 
 
+def _envelope(output: dict[str, object]) -> dict[str, object]:
+    """Decode the JSON-encoded error envelope from a job output."""
+    import json
+
+    decoded: dict[str, object] = json.loads(str(output["error"]))
+    return decoded
+
+
 def _run(
     job_input: dict[str, object],
     pipeline: FakePipeline,
@@ -101,7 +109,7 @@ def test_oom_sets_refresh_worker(settings: Settings) -> None:
     output = _run({"prompt": "x"}, pipeline, settings)
 
     assert output["refresh_worker"] is True
-    assert output["error"]["code"] == "OOM"  # type: ignore[index]
+    assert _envelope(output)["code"] == "OOM"  # type: ignore[index]
 
 
 def test_generic_failure_does_not_leak_internal_detail(settings: Settings) -> None:
@@ -109,7 +117,7 @@ def test_generic_failure_does_not_leak_internal_detail(settings: Settings) -> No
 
     output = _run({"prompt": "x"}, pipeline, settings)
 
-    assert output["error"]["code"] == "INFERENCE_FAILED"  # type: ignore[index]
+    assert _envelope(output)["code"] == "INFERENCE_FAILED"  # type: ignore[index]
     assert "refresh_worker" not in output
     assert "secret" not in str(output)
 
@@ -125,7 +133,7 @@ def test_blocked_prompt_never_reaches_the_pipeline(
 
     output = _run({"prompt": "anything"}, pipeline, settings)
 
-    assert output["error"]["code"] == "PROMPT_BLOCKED"  # type: ignore[index]
+    assert _envelope(output)["code"] == "PROMPT_BLOCKED"  # type: ignore[index]
     assert pipeline.calls == []
 
 
@@ -140,7 +148,7 @@ def test_blocked_image_is_reported_and_not_returned(
 
     output = _run({"prompt": "x"}, pipeline, settings)
 
-    assert output["error"]["code"] == "IMAGE_BLOCKED"  # type: ignore[index]
+    assert _envelope(output)["code"] == "IMAGE_BLOCKED"  # type: ignore[index]
     assert "image_base64" not in output
 
 
@@ -160,7 +168,7 @@ def test_invalid_prompt_is_rejected_before_the_pipeline(
 ) -> None:
     output = _run({"prompt": "   "}, pipeline, settings)
 
-    assert output["error"]["code"] == "INVALID_PROMPT"  # type: ignore[index]
+    assert _envelope(output)["code"] == "INVALID_PROMPT"  # type: ignore[index]
     assert pipeline.calls == []
 
 
@@ -169,7 +177,7 @@ def test_invalid_dimensions_map_to_their_own_code(
 ) -> None:
     output = _run({"prompt": "x", "width": 99}, pipeline, settings)
 
-    assert output["error"]["code"] == "INVALID_DIMENSIONS"  # type: ignore[index]
+    assert _envelope(output)["code"] == "INVALID_DIMENSIONS"  # type: ignore[index]
 
 
 def test_invalid_steps_map_to_their_own_code(
@@ -177,13 +185,13 @@ def test_invalid_steps_map_to_their_own_code(
 ) -> None:
     output = _run({"prompt": "x", "num_inference_steps": 99}, pipeline, settings)
 
-    assert output["error"]["code"] == "INVALID_STEPS"  # type: ignore[index]
+    assert _envelope(output)["code"] == "INVALID_STEPS"  # type: ignore[index]
 
 
 def test_errors_carry_a_suggestion(pipeline: FakePipeline, settings: Settings) -> None:
     output = _run({"prompt": ""}, pipeline, settings)
 
-    assert output["error"]["suggestion"]  # type: ignore[index]
+    assert _envelope(output)["suggestion"]
 
 
 def test_missing_input_key_is_handled(

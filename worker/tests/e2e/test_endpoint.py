@@ -41,16 +41,29 @@ def _endpoint() -> Any:
 
 
 def _run_and_wait(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the terminal job record: status, plus output or error.
+
+    The SDK pops an `error` key out of the handler's return, promotes it to
+    the job's `error` field and marks the job FAILED — so error envelopes are
+    never in `output`, and `job.output()` is None for them.
+    """
     job = _endpoint().run(payload)
     deadline = time.monotonic() + RUN_TIMEOUT_S
     while time.monotonic() < deadline:
         status = job.status()
         if status in {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}:
-            output: dict[str, Any] = job.output()
-            return output
+            record: dict[str, Any] = job._fetch_job()  # noqa: SLF001 - no public accessor returns error + output together
+            return record
         time.sleep(POLL_INTERVAL_S)
     msg = f"job not terminal within {RUN_TIMEOUT_S}s"
     raise TimeoutError(msg)
+
+
+def _error_envelope(record: dict[str, Any]) -> dict[str, Any]:
+    """Extract the worker's error envelope from a FAILED job record."""
+    raw = record["error"]
+    parsed: dict[str, Any] = json.loads(raw) if isinstance(raw, str) else raw
+    return parsed
 
 
 def _decode_image(output: dict[str, Any]) -> tuple[int, int]:
@@ -64,9 +77,10 @@ def _decode_image(output: dict[str, Any]) -> tuple[int, int]:
 
 def test_prompt_returns_decodable_image() -> None:
     """The graded demonstration: text in, real image out."""
-    output = _run_and_wait({"prompt": "a red fox in falling snow", "seed": 7})
+    record = _run_and_wait({"prompt": "a red fox in falling snow", "seed": 7})
 
-    assert "error" not in output
+    assert record["status"] == "COMPLETED"
+    output = record["output"]
     width, height = _decode_image(output)
     assert (width, height) == (output["width"], output["height"])
     assert output["seed"] == 7
@@ -92,8 +106,8 @@ def test_same_seed_is_reproducible() -> None:
     across hosts. The echoed seed and effective dimensions are the contract.
     """
     payload = {"prompt": "a clockwork owl", "seed": 1234, "num_inference_steps": 8}
-    first = _run_and_wait(payload)
-    second = _run_and_wait(payload)
+    first = _run_and_wait(payload)["output"]
+    second = _run_and_wait(payload)["output"]
 
     assert first["seed"] == second["seed"] == 1234
     assert (first["width"], first["height"]) == (second["width"], second["height"])
@@ -123,22 +137,29 @@ def test_progress_is_visible_mid_generation() -> None:
 def test_blocked_prompt_returns_prompt_blocked() -> None:
     """The guardrail path through the real stack, ending in a clean envelope."""
     blocklist = json.loads(contract_path("blocklist.json").read_text())
-    term = blocklist["terms"][0]["term"]
+    term = blocklist["categories"]["graphic_violence"][0]
 
-    output = _run_and_wait({"prompt": f"a photo of {term}"})
+    record = _run_and_wait({"prompt": f"a photo of {term}"})
 
-    assert output["error"]["code"] == "PROMPT_BLOCKED"
-    assert output["error"]["suggestion"]
+    assert record["status"] == "FAILED"
+    envelope = _error_envelope(record)
+    assert envelope["code"] == "PROMPT_BLOCKED"
+    assert envelope["suggestion"]
 
 
 def test_dimensions_snap_and_are_reported() -> None:
     """1000px requests render at 992 — the effective values are the truth."""
-    output = _run_and_wait(
-        {"prompt": "a tiled courtyard", "width": 1000, "height": 1000,
-         "num_inference_steps": 8}
+    record = _run_and_wait(
+        {
+            "prompt": "a tiled courtyard",
+            "width": 1000,
+            "height": 1000,
+            "num_inference_steps": 8,
+        }
     )
 
-    assert "error" not in output
+    assert record["status"] == "COMPLETED"
+    output = record["output"]
     assert output["width"] == 992
     assert output["height"] == 992
     assert _decode_image(output) == (992, 992)
@@ -147,8 +168,9 @@ def test_dimensions_snap_and_are_reported() -> None:
 def test_invalid_input_costs_no_gpu_time() -> None:
     """A bad request fails fast with a structured envelope, not a stack trace."""
     started = time.monotonic()
-    output = _run_and_wait({"prompt": "", "width": 512})
+    record = _run_and_wait({"prompt": "", "width": 512})
     elapsed = time.monotonic() - started
 
-    assert output["error"]["code"] == "INVALID_PROMPT"
+    assert record["status"] == "FAILED"
+    assert _error_envelope(record)["code"] == "INVALID_PROMPT"
     assert elapsed < 60  # rejected before the pipeline, not after an inference

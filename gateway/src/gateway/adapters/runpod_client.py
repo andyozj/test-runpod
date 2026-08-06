@@ -7,6 +7,7 @@ mapping out of RunPod's vocabulary — so `core/` never sees a transport detail.
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 from dataclasses import dataclass, field
 from typing import Any
@@ -154,15 +155,23 @@ class HttpRunPodClient:
         status = map_status(str(body.get("status", "")))
         output = body.get("output") or {}
 
+        # The worker JSON-encodes its envelope into the platform's error
+        # string; older shapes carried a dict in output. Both decode here.
+        raw_error = body.get(
+            "error", output.get("error") if isinstance(output, dict) else None
+        )
+
         if status is JobStatus.COMPLETED:
-            if isinstance(output, dict) and "error" in output:
-                return _error_status(output["error"])
+            if raw_error is not None:
+                return _error_status(_decode_error(raw_error))
             return RunPodJobStatus(status=status, result=_result(output))
         if status.terminal:
+            if raw_error is not None:
+                return _error_status(_decode_error(raw_error))
             return RunPodJobStatus(
                 status=status,
                 error_code=ErrorCode.INFERENCE_FAILED,
-                error_message=str(body.get("error", "Generation failed.")),
+                error_message="Generation failed.",
             )
         return RunPodJobStatus(status=status, progress=_progress(output))
 
@@ -250,6 +259,22 @@ def _result(output: dict[str, Any]) -> JobResult:
         model_version=str(output.get("model_version", "unknown")),
         inference_seconds=float(output.get("timings", {}).get("inference_s", 0.0)),
     )
+
+
+def _decode_error(raw: Any) -> dict[str, Any]:
+    """Normalise the upstream error field into an envelope dict.
+
+    The worker JSON-encodes its envelope because the platform drops dict
+    errors. Anything undecodable becomes a message-only envelope rather than
+    an exception — a malformed error must never mask the failure it reports.
+    """
+    if isinstance(raw, dict):
+        return raw
+    try:
+        decoded = json.loads(str(raw))
+    except (TypeError, ValueError):
+        return {"message": str(raw)}
+    return decoded if isinstance(decoded, dict) else {"message": str(raw)}
 
 
 def _error_status(error: dict[str, Any]) -> RunPodJobStatus:

@@ -79,6 +79,26 @@ class WorkerError(Exception):
             body["suggestion"] = self.suggestion
         return {"error": body}
 
+    def job_output(self) -> dict[str, Any]:
+        """Return the envelope in the platform's wire format.
+
+        The RunPod SDK pops `error` from the handler's return and forwards it,
+        but the platform only carries it as a string — a dict envelope is
+        silently dropped and the caller sees a completed job with no output
+        (observed live, 2026-08-06). JSON-encoding preserves the structured
+        envelope; callers decode the string.
+
+        Returns:
+            A dict whose `error` value is the JSON-encoded envelope body.
+
+        Example:
+            >>> import json
+            >>> err = WorkerError(ErrorCode.OOM, "VRAM exhausted.")
+            >>> json.loads(err.job_output()["error"])["code"]
+            'OOM'
+        """
+        return {"error": json.dumps(self.envelope()["error"])}
+
 
 class InvalidInputError(WorkerError):
     """Raised when a job payload fails validation."""

@@ -64,7 +64,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     try:
         request = _parse(job_input)
     except WorkerError as exc:
-        return exc.envelope()
+        return exc.job_output()
 
     log = logger.bind(
         correlation_id=request.correlation_id,
@@ -269,7 +269,7 @@ def _error_output(exc: WorkerError, log: Any) -> dict[str, Any]:
         The error envelope, with `refresh_worker` set for OOM.
     """
     log.warning("job_failed", code=exc.code.value)
-    output = exc.envelope()
+    output = exc.job_output()
     if exc.code is ErrorCode.OOM:
         _empty_cache()
         output["refresh_worker"] = True
