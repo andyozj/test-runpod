@@ -262,6 +262,26 @@ def apply(
     return 0
 
 
+def is_latest_tag(tag: str) -> bool:
+    """Return whether a tag is (or resolves to) the mutable `latest` tag.
+
+    Args:
+        tag: The requested image tag.
+
+    Returns:
+        True if applying this tag would mean deploying `latest`.
+
+    Example:
+        >>> is_latest_tag("0.1.0-a3f21c8-slim")
+        False
+        >>> is_latest_tag("latest")
+        True
+        >>> is_latest_tag("ghcr.io/owner/flux-worker:latest")
+        True
+    """
+    return tag == "latest" or tag.endswith(":latest")
+
+
 def main() -> int:
     """Parse arguments and apply.
 
@@ -279,7 +299,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.tag == "latest" or args.tag.endswith(":latest"):
+    if is_latest_tag(args.tag):
         print("refusing to deploy `latest`; use an immutable tag", file=sys.stderr)
         return 2
 
