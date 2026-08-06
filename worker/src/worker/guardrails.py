@@ -18,9 +18,7 @@ from worker.contracts import contract_path
 
 _CONTRACT = contract_path("blocklist.json")
 
-Action = Literal["allow", "flag", "block"]
-
-_SEVERITY: dict[Action, int] = {"allow": 0, "flag": 1, "block": 2}
+Action = Literal["allow", "block"]
 
 # Characters used to break up a term without changing how it reads: zero-width
 # spaces, joiners, and the soft hyphen.
@@ -48,11 +46,6 @@ _CONFUSABLES = str.maketrans(
 class GuardrailVerdict:
     """The outcome of one guardrail check.
 
-    Three actions rather than two: moderation has three honest answers, and a
-    binary interface forces every unsure case to be collapsed at the moment of
-    judgement, after which the information is gone. `flag` currently behaves as
-    `allow` plus an audit record — no review queue consumes it yet.
-
     Attributes:
         action: What the caller should do.
         categories: Which categories matched.
@@ -73,7 +66,7 @@ class GuardrailVerdict:
             True only for a `block` verdict.
 
         Example:
-            >>> GuardrailVerdict(action="flag").blocked
+            >>> GuardrailVerdict().blocked
             False
             >>> GuardrailVerdict(action="block").blocked
             True
@@ -269,41 +262,3 @@ class NoopImageGuardrail:
             Always an `allow` verdict.
         """
         return GuardrailVerdict()
-
-
-@dataclass
-class ChainedPromptGuardrail:
-    """Runs members in order and returns the most severe verdict.
-
-    Attributes:
-        members: The guardrails to apply.
-    """
-
-    members: list[PromptGuardrail]
-
-    def check(self, prompt: str) -> GuardrailVerdict:
-        """Apply every member and return the most severe outcome.
-
-        A member raising is treated as a block: a safety control that disables
-        itself when its dependency fails is worse than none, because the system
-        still reports itself protected.
-
-        Args:
-            prompt: The raw user-supplied text.
-
-        Returns:
-            The most severe verdict produced by any member.
-        """
-        worst = GuardrailVerdict()
-        for member in self.members:
-            try:
-                verdict = member.check(prompt)
-            except Exception as exc:  # noqa: BLE001 - fail closed, deliberately
-                return GuardrailVerdict(
-                    action="block",
-                    categories=("guardrail_error",),
-                    reason=f"Guardrail failed: {type(exc).__name__}",
-                )
-            if _SEVERITY[verdict.action] > _SEVERITY[worst.action]:
-                worst = verdict
-        return worst

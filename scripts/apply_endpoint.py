@@ -80,6 +80,12 @@ def _request(
 def load_config(path: Path) -> dict[str, Any]:
     """Read an endpoint declaration.
 
+    PyYAML is required rather than falling back to a hand-rolled subset
+    parser: a parser that guesses list-vs-mapping from a hardcoded key set
+    silently misreads any new key, and a deploy tool must fail loudly or not
+    at all. Run via `uv run --with pyyaml scripts/apply_endpoint.py ...` if it
+    is not already installed.
+
     Args:
         path: The YAML file to read.
 
@@ -88,71 +94,12 @@ def load_config(path: Path) -> dict[str, Any]:
     """
     try:
         import yaml
+    except ImportError as exc:  # pragma: no cover - environment-dependent
+        msg = "PyYAML is required: uv run --with pyyaml scripts/apply_endpoint.py"
+        raise SystemExit(msg) from exc
 
-        loaded: dict[str, Any] = yaml.safe_load(path.read_text())
-    except ImportError:
-        loaded = _parse_simple_yaml(path.read_text())
+    loaded: dict[str, Any] = yaml.safe_load(path.read_text())
     return loaded
-
-
-def _parse_simple_yaml(text: str) -> dict[str, Any]:
-    """Parse the flat subset of YAML these config files use.
-
-    Avoids a PyYAML dependency for a handful of scalars, one nested mapping and
-    two lists.
-
-    Args:
-        text: File contents.
-
-    Returns:
-        The parsed mapping.
-    """
-    root: dict[str, Any] = {}
-    container: Any = None
-    container_indent = -1
-
-    for raw in text.splitlines():
-        line = raw.split("#")[0].rstrip()
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip())
-        stripped = line.strip()
-
-        if stripped.startswith("- "):
-            if isinstance(container, list):
-                container.append(_scalar(stripped[2:]))
-            continue
-
-        if container is not None and indent > container_indent:
-            key, _, value = stripped.partition(":")
-            if isinstance(container, dict):
-                container[key.strip()] = _scalar(value)
-                continue
-
-        key, _, value = stripped.partition(":")
-        key, value = key.strip(), value.strip()
-        if value:
-            root[key] = _scalar(value)
-            container, container_indent = None, -1
-        else:
-            container = [] if key in _LIST_KEYS else {}
-            root[key] = container
-            container_indent = indent
-    return root
-
-
-_LIST_KEYS = {"gpu_types", "allowed_cuda_versions"}
-
-
-def _scalar(value: str) -> Any:
-    value = value.strip().strip('"')
-    if value in {"null", "~", ""}:
-        return None
-    if value in {"true", "false"}:
-        return value == "true"
-    if value.lstrip("-").isdigit():
-        return int(value)
-    return value
 
 
 def find_by_name(resource: str, name: str, api_key: str) -> str | None:

@@ -1,4 +1,4 @@
-"""Blocklist normalisation, false positives, chaining and failure policy."""
+"""Blocklist normalisation, false positives and verdict semantics."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import pytest
 
 from worker.guardrails import (
     BlocklistPromptGuardrail,
-    ChainedPromptGuardrail,
     GuardrailVerdict,
     NoopImageGuardrail,
     load_terms,
@@ -84,35 +83,6 @@ def test_noop_image_guardrail_allows() -> None:
     assert NoopImageGuardrail().check(b"\x89PNG").action == "allow"
 
 
-class _Raising:
-    def check(self, prompt: str) -> GuardrailVerdict:
-        msg = "classifier unreachable"
-        raise RuntimeError(msg)
-
-
-class _Flagging:
-    def check(self, prompt: str) -> GuardrailVerdict:
-        return GuardrailVerdict(action="flag", categories=("uncertain",))
-
-
-def test_chain_returns_the_most_severe_verdict() -> None:
-    chain = ChainedPromptGuardrail(
-        members=[_Flagging(), BlocklistPromptGuardrail(terms=SYNTHETIC)]
-    )
-
-    assert chain.check("zzqblockedqz").action == "block"
-    assert chain.check("harmless").action == "flag"
-
-
-def test_a_raising_guardrail_blocks_rather_than_failing_open() -> None:
-    chain = ChainedPromptGuardrail(members=[_Raising()])
-
-    verdict = chain.check("harmless")
-
-    assert verdict.action == "block"
-    assert verdict.categories == ("guardrail_error",)
-
-
-def test_flag_is_not_blocked() -> None:
-    assert GuardrailVerdict(action="flag").blocked is False
+def test_allow_is_not_blocked() -> None:
+    assert GuardrailVerdict().blocked is False
     assert GuardrailVerdict(action="block").blocked is True

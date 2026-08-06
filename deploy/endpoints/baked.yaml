@@ -42,14 +42,14 @@ allowed_cuda_versions:
   - "12.9"
   - "12.8"
 
-# Disk for the image plus working space. The image is ~2.9GB.
-container_disk_gb: 20                # keeps VRAM resident between jobs
+# Disk for the image plus working space. The BAKED image is ~45GB — this
+# value must exceed it or the container can never pull.
+container_disk_gb: 60
 
 # GPU-bound. A second concurrent job causes VRAM contention, not throughput.
 concurrency_modifier: 1
 
 env:
   WEIGHTS_PATH: /opt/weights
-  LOG_LEVEL: INFO
   # Secrets are references, never values — this file is committed.
   # HF_TOKEN is a build-time BuildKit secret and is not needed at runtime.
