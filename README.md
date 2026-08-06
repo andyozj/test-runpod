@@ -274,16 +274,77 @@ Decisions and their trade-offs, including the options rejected and what is delib
 
 ### Diagrams
 
-Each opens in Excalidraw and is editable.
+**System context.** Two tiers, one direction of dependency: nothing in the worker knows the gateway exists.
 
-| Diagram | Shows |
-|---|---|
-| [System context](https://excalidraw.com/#json=uZeWZkY3mvbnTlHe4SFAE,Jz6Rkp2yaUftbLUiqkydew) | Two tiers, one direction of dependency |
-| [Worker lifecycle](https://excalidraw.com/#json=kwh-XFq8_sxRUP9eEND3M,7JVRVZVNXn7KKsg89QYG3Q) | Cold start vs warm, and why the pipeline is lazy |
-| [Job state machine](https://excalidraw.com/#json=GpbKfRPNbJuct2xSpLadJ,RQKzqy43XOY0h7AxpzIIlg) | Terminal states, and what the reconciler may not do |
-| [Guardrail chain](https://excalidraw.com/#json=qfBT0mQYdPnR_iafmHXQW,Ob3GBEjScWmywFHqppcU3Q) | Two prompt checkpoints, and why both are needed |
-| [Correlation](https://excalidraw.com/#json=Uig_Bds2I3M_Cq9NVyszm,_Y0E4L_-BuLpMwEW6chxlA) | One id from HTTP through the GPU and back |
-| [Image layers](https://excalidraw.com/#json=KhbTALYghWAfdJV8d5Wcs,9OZHA523fBKl-aOIJQc6Ow) | Why weights sit below application code |
+```mermaid
+flowchart LR
+    caller["any caller"] -->|"POST /v1/jobs"| gw["gateway (spike)"]
+    client["client/generate.py"] -->|"/run, /status"| rp["RunPod serverless"]
+    gw -->|"/run, /status"| rp
+    rp --> w["worker handler (GPU)"]
+    c[("contracts/")] -.-> gw
+    c -.-> w
+```
+
+**Worker lifecycle.** Cold start vs warm, and why the pipeline loads in `main()` rather than at import: the first billed job runs against a warm pipeline.
+
+```mermaid
+flowchart TD
+    pull["fresh host: pull 2.9GB image,<br>platform stages weights"] --> boot["container start: main()"]
+    boot --> load["get_pipeline: resolve staged snapshot,<br>~34GB to VRAM (the cold cost)"]
+    load --> serve["runpod.serverless.start"]
+    resume["FlashBoot resume:<br>pipeline already resident"] --> serve
+    serve --> job["job: validate, guardrails,<br>infer, encode"] --> serve
+```
+
+**Job state machine.** Terminal states are written once, never reversed; the reconciler only ever advances a job.
+
+```mermaid
+stateDiagram-v2
+    [*] --> QUEUED
+    QUEUED --> BLOCKED: guardrail (a decision, not an error)
+    QUEUED --> FAILED: load shed / upstream submit failed
+    QUEUED --> IN_PROGRESS
+    QUEUED --> CANCELLED: cancel route (we originate this one)
+    IN_PROGRESS --> CANCELLED
+    IN_PROGRESS --> COMPLETED
+    IN_PROGRESS --> FAILED
+    IN_PROGRESS --> TIMED_OUT: reported by RunPod only
+```
+
+**Guardrail chain.** Two prompt checkpoints, both reading `contracts/blocklist.json`: the gateway rejects before a GPU spins, the worker enforces even for callers that never pass through the gateway.
+
+```mermaid
+flowchart LR
+    p["prompt"] --> g["gateway blocklist<br>(submit time, pre-billing)"]
+    g --> rp["RunPod"] --> wg["worker prompt guardrail<br>(authoritative)"]
+    wg --> inf["inference"] --> ig["image guardrail"] --> out["result"]
+```
+
+**Correlation.** One id from HTTP through the GPU and back.
+
+```mermaid
+sequenceDiagram
+    participant C as caller
+    participant G as gateway
+    participant R as RunPod
+    participant W as worker
+    C->>G: X-Correlation-ID
+    G->>R: correlation_id in payload
+    R->>W: input.correlation_id
+    Note over W: bound into every worker log line
+    W-->>C: same id on the result and in logs at every hop
+```
+
+**Image layers.** Weights sit below application code, so a code change re-pushes kilobytes, never 33GB.
+
+```mermaid
+flowchart TD
+    src["app src (KBs, changes most)"] --> wts["weights ~33GB (baked only; skipped in slim)"]
+    wts --> deps["python 3.11 venv + torch deps"]
+    deps --> apt["apt libs"]
+    apt --> base["ubuntu:22.04"]
+```
 
 ## Repository
 
