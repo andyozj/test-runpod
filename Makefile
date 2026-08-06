@@ -1,5 +1,10 @@
 PACKAGES := worker gateway
 
+# Override on the command line for other registries or explicit versions:
+#   make build-slim IMAGE=ghcr.io/you/flux-worker TAG=0.1.0-abc1234
+IMAGE ?= ghcr.io/andyozj/flux-worker
+TAG ?= 0.1.0-$(shell git rev-parse --short HEAD)
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -40,9 +45,9 @@ lint: lint-tools
 
 .PHONY: lint-tools
 lint-tools: ## Lint the CLI tools outside both packages
-	@echo "== lint client/ scripts/"
-	@uvx ruff@0.7.4 format --check client scripts || exit 1
-	@uvx ruff@0.7.4 check client scripts || exit 1
+	@echo "== lint client/ scripts/ benchmarks/"
+	@uvx ruff@0.7.4 format --check client scripts benchmarks || exit 1
+	@uvx ruff@0.7.4 check client scripts benchmarks || exit 1
 
 .PHONY: types
 types:
@@ -70,6 +75,9 @@ test:
 doctest: ## Run the executable examples
 	cd worker && uv run pytest --doctest-modules \
 		src/worker/schemas.py src/worker/guardrails.py src/worker/errors.py -q
+	cd gateway && uv run pytest --doctest-modules \
+		src/gateway/core/models.py src/gateway/core/protocols.py \
+		src/gateway/adapters/runpod_client.py src/gateway/adapters/guardrails.py -q
 
 .PHONY: weights-check
 weights-check: ## Verify the weight filter against the live manifest. No download.
@@ -83,12 +91,10 @@ weights-check: ## Verify the weight filter against the live manifest. No downloa
 build-slim: ## Build the deployed image (~2.9GB, no weights). Runs locally.
 	docker buildx build --platform linux/amd64 \
 		--build-arg BAKE_WEIGHTS=false \
-		--build-arg MODEL_REVISION=$$(cat contracts/model-revision.txt) \
 		-f worker/Dockerfile -t $(IMAGE):$(TAG)-slim .
 
 .PHONY: build-baked
 build-baked: ## Build the weights-in-image variant (~45GB). Documented, not deployed.
 	docker buildx build --platform linux/amd64 \
 		--secret id=hf_token,env=HF_TOKEN \
-		--build-arg MODEL_REVISION=$$(cat contracts/model-revision.txt) \
 		-f worker/Dockerfile -t $(IMAGE):$(TAG)-baked .

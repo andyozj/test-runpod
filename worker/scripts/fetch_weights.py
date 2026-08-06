@@ -48,22 +48,22 @@ REQUIRED_PREFIXES = (
 )
 
 
-def revision() -> str:
-    """Return the pinned model revision from the shared contract.
+def resolve_sha(rev: str) -> str:
+    """Resolve a branch or tag to the commit SHA it points at today.
 
-    Searches upward because the script sits at different depths in the repo
-    (`worker/scripts/`) and in the image (`/app/scripts/`, contracts at
-    `/app/contracts/`).
+    The manifest must record a SHA, not a moving name — `main` in a manifest
+    says nothing about which weights are actually in the image.
+
+    Args:
+        rev: A revision name or SHA.
 
     Returns:
         The 40-character commit SHA.
     """
-    for parent in Path(__file__).resolve().parents:
-        path = parent / "contracts" / "model-revision.txt"
-        if path.exists():
-            return path.read_text().strip()
-    msg = "contracts/model-revision.txt not found in any parent directory"
-    raise FileNotFoundError(msg)
+    from huggingface_hub import HfApi
+
+    sha = HfApi().model_info(REPO_ID, revision=rev).sha
+    return str(sha)
 
 
 def _matches_ignore(name: str) -> bool:
@@ -167,12 +167,12 @@ def main() -> int:
     parser.add_argument("--dest", type=Path, default=Path("/opt/weights"))
     parser.add_argument(
         "--revision",
-        default=None,
-        help="model revision; defaults to contracts/model-revision.txt",
+        default="main",
+        help="model revision; branch names are resolved to a SHA",
     )
     args = parser.parse_args()
 
-    rev = args.revision or revision()
+    rev = resolve_sha(args.revision)
     if args.check:
         return check(rev)
     return download(args.dest, rev)

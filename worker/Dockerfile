@@ -4,13 +4,13 @@
 # so a code change never invalidates the ~33GB layer — reversing those two costs
 # an hour per build.
 #
-# Build (baked, the default and what the brief asks for):
-#   docker buildx build --secret id=hf_token,env=HF_TOKEN \
-#     -t ghcr.io/OWNER/flux-worker:0.1.0-SHA-baked .
+# Build (slim, ~2.9GB — the DEPLOYED variant; weights arrive via RunPod's
+# cached models):
+#   make build-slim
 #
-# Build (network volume variant, ~10GB):
-#   docker buildx build --build-arg BAKE_WEIGHTS=false \
-#     -t ghcr.io/OWNER/flux-worker:0.1.0-SHA-volume .
+# Build (baked, ~45GB — handler and model in one image, the artefact the
+# brief names; kept as the fallback, not deployed):
+#   make build-baked        # needs HF_TOKEN exported
 
 FROM ubuntu:22.04
 
@@ -79,9 +79,6 @@ RUN --mount=type=secret,id=hf_token \
 COPY worker/src/ /app/src/
 COPY worker/test_input.json ./
 ENV PYTHONPATH=/app/src
-
-ARG MODEL_REVISION=main
-ENV MODEL_REVISION=${MODEL_REVISION}
 
 # Never reach for the network at load time. The pipeline already passes
 # local_files_only=True; these make a misconfiguration fail loudly instead of

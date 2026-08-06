@@ -53,16 +53,6 @@ def get_pipeline() -> ImagePipeline:
     return _pipeline
 
 
-def set_pipeline(pipeline: ImagePipeline | None) -> None:
-    """Replace the process-wide pipeline. Tests only.
-
-    Args:
-        pipeline: The replacement, or None to reset.
-    """
-    global _pipeline
-    _pipeline = pipeline
-
-
 def _load_pipeline() -> ImagePipeline:  # pragma: no cover - requires a GPU
     """Load FLUX.1-dev from the configured weights path onto the GPU.
 
@@ -83,6 +73,11 @@ def _load_pipeline() -> ImagePipeline:  # pragma: no cover - requires a GPU
 
     settings = get_settings()
     path = weights.resolve(settings)
+    # Report the revision the snapshot actually holds; the env value is only
+    # a fallback for layouts that carry no evidence.
+    discovered = weights.discovered_revision(path)
+    if discovered is not None:
+        settings.model_revision = discovered
 
     started = time.perf_counter()
     pipe = FluxPipeline.from_pretrained(

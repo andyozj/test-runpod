@@ -9,7 +9,6 @@ rejects — a failure that appears only in production.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -45,9 +44,3 @@ def test_bounds_match_the_contract(field: str, key: str, expected: int) -> None:
     schema = json.loads((CONTRACTS / "generation-request.schema.json").read_text())
 
     assert schema["properties"][field][key] == expected
-
-
-def test_model_revision_is_a_well_formed_sha() -> None:
-    revision = (CONTRACTS / "model-revision.txt").read_text().strip()
-
-    assert re.fullmatch(r"[0-9a-f]{40}", revision)

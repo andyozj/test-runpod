@@ -1,12 +1,18 @@
-"""Locate model weights across all three delivery mechanisms.
+"""Locate model weights and discover which revision was actually staged.
 
-The worker is identical whether weights are baked into the image, mounted from
-a network volume, or pre-staged by RunPod's model cache. Only where they are
-found differs, and that is resolved here rather than in the pipeline.
+The worker is identical whether weights are baked into the image or
+pre-staged by RunPod's model cache. Only where they are found differs, and
+that is resolved here rather than in the pipeline.
+
+The revision is discovered, not pinned: cached models are staged by the
+platform from the console's Model field, which offers no revision control —
+so the worker reports the revision it actually loaded rather than refusing
+over a value nobody can set.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import structlog
@@ -45,11 +51,38 @@ def snapshot_dir(cache_root: Path, model_id: str, revision: str) -> Path:
     return cache_root / f"models--{org}--{name}" / "snapshots" / revision
 
 
+def discovered_revision(path: Path) -> str | None:
+    """Return the revision the resolved directory actually holds.
+
+    Cache snapshots are named by commit SHA; baked images carry the
+    `MANIFEST.json` that `fetch_weights.py` writes at build time.
+
+    Args:
+        path: The resolved weights directory.
+
+    Returns:
+        The revision, or None when the layout carries no evidence.
+    """
+    if path.parent.name == "snapshots":
+        return path.name
+    manifest = path / "MANIFEST.json"
+    if manifest.exists():
+        rev = json.loads(manifest.read_text()).get("revision")
+        return str(rev) if rev else None
+    return None
+
+
 def resolve(settings: Settings) -> Path:
     """Find the weights directory, trying each delivery mechanism in order.
 
     Order is deliberate: an explicitly configured path always wins, because a
     deployment that sets one has made a decision the cache must not override.
+
+    In the cache, the staged snapshot is identified through `refs/main` when
+    present, or by being the only snapshot. Several snapshots with no ref is
+    the one case that still refuses: picking one arbitrarily — as the
+    platform's own example does by sorting and taking the first — would run a
+    model the response then misattributes.
 
     Args:
         settings: Runtime configuration.
@@ -58,8 +91,8 @@ def resolve(settings: Settings) -> Path:
         A directory containing the diffusers layout.
 
     Raises:
-        WeightsNotFoundError: Nothing usable was found, or the cache holds a
-            revision other than the pinned one.
+        WeightsNotFoundError: Nothing usable was found, or the cache holds
+            several snapshots with no ref naming the staged one.
     """
     if settings.weights_path.exists():
         logger.info("weights_resolved", source="path", path=str(settings.weights_path))
@@ -75,44 +108,37 @@ def resolve(settings: Settings) -> Path:
         )
         raise WeightsNotFoundError(msg)
 
-    pinned = snapshot_dir(cache_root, settings.model_id, settings.model_revision)
-    if pinned.exists():
-        logger.info("weights_resolved", source="cache", path=str(pinned))
-        return pinned
-
-    raise WeightsNotFoundError(_mismatch_message(cache_root, settings, pinned))
-
-
-def _mismatch_message(cache_root: Path, settings: Settings, pinned: Path) -> str:
-    """Explain what the cache holds instead of the pinned revision.
-
-    The HuggingFace cache layout allows several snapshots to coexist. Picking
-    an arbitrary one — as the platform's own example does by sorting and taking
-    the first — would run a model the response then misreports as the pinned
-    revision, and would quietly invalidate any comparison between endpoints.
-    Refusing to start is the correct behaviour.
-
-    Args:
-        cache_root: The cache hub directory.
-        settings: Runtime configuration.
-        pinned: The snapshot path that was expected.
-
-    Returns:
-        A message naming what is present.
-    """
     org, _, name = settings.model_id.partition("/")
-    snapshots = cache_root / f"models--{org}--{name}" / "snapshots"
+    repo_dir = cache_root / f"models--{org}--{name}"
+    snapshots = repo_dir / "snapshots"
     present = (
-        sorted(p.name for p in snapshots.iterdir() if p.is_dir())
+        sorted(p for p in snapshots.iterdir() if p.is_dir())
         if snapshots.is_dir()
         else []
     )
-    return (
-        f"Model cache does not contain the pinned revision "
-        f"{settings.model_revision} at {pinned}. "
-        f"Present: {', '.join(present) or 'nothing'}. "
-        "Refusing to start rather than run a different model: the response "
-        "reports model_version from the pinned revision, so a mismatch would "
-        "misattribute every image. Update contracts/model-revision.txt or "
-        "re-stage the endpoint's cached model."
+    if not present:
+        msg = (
+            f"Model cache at {cache_root} holds no snapshot of "
+            f"{settings.model_id}. Check the endpoint's Model field."
+        )
+        raise WeightsNotFoundError(msg)
+
+    ref = repo_dir / "refs" / "main"
+    if ref.exists():
+        staged = snapshots / ref.read_text().strip()
+        if staged.is_dir():
+            logger.info("weights_resolved", source="cache-ref", path=str(staged))
+            return staged
+
+    if len(present) == 1:
+        logger.info("weights_resolved", source="cache", path=str(present[0]))
+        return present[0]
+
+    msg = (
+        f"Model cache holds {len(present)} snapshots of {settings.model_id} "
+        f"({', '.join(p.name[:12] for p in present)}) and no ref names the "
+        "staged one. Refusing to guess: an arbitrary pick would run a model "
+        "the response then misattributes. Re-stage the endpoint's cached "
+        "model, or set WEIGHTS_PATH to the intended snapshot."
     )
+    raise WeightsNotFoundError(msg)

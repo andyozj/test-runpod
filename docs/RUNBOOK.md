@@ -8,8 +8,8 @@ Update on every deploy. **A rollback that begins with "work out which tag was go
 
 | Date | Endpoint | Tag | Previous (rollback target) | Notes |
 |---|---|---|---|---|
-| 2026-08-06 | `flux-worker-cached` (`7jrg4nu4b47fsv`) | `0.1.0-44c9643-slim` | — (first deploy) | Image digest `bfc09415c350`. Cached model + HF token set in console post-create |
-| 2026-08-06 | `flux-worker-cached` (`7jrg4nu4b47fsv`) | `0.1.0-72e537d-slim` | `0.1.0-44c9643-slim` | Error envelopes JSON-encoded; GPU list narrowed to L40S only. 7/7 e2e green post-roll |
+| 2026-08-06 | `flux-worker-cached` (`<endpoint-id — supplied in the submission email>`) | `0.1.0-44c9643-slim` | — (first deploy) | Image digest `bfc09415c350`. Cached model + HF token set in console post-create |
+| 2026-08-06 | `flux-worker-cached` (`<endpoint-id — supplied in the submission email>`) | `0.1.0-72e537d-slim` | `0.1.0-44c9643-slim` | Error envelopes JSON-encoded; GPU list narrowed to L40S only. 7/7 e2e green post-roll |
 
 ## Prerequisites
 
@@ -123,7 +123,7 @@ Ordered by how often each is actually the cause.
 | New release deployed, behaviour unchanged | **Documented**: releases roll gradually and old versions serve "until they are replaced", with no time bound — API and console updates alike. The narrow gap: a **FlashBoot-retained** worker is neither "idle" (terminated immediately) nor "processing", and one resumed old code on the next job (2026-08-06) | The bounce — the documented remedy for strict consistency. `apply_endpoint.py` does it automatically. The Workers tab marks old-version workers "terminating" during a rollout |
 | Worker starts and dies immediately | Image built for arm64 | `docker inspect $IMAGE:$TAG-slim \| grep Architecture` — must be `amd64` |
 | Every job fails at startup | Weights not found, or cache holds a different revision | Worker logs — `weights_resolved` on success; otherwise a message naming all three mechanisms |
-| Refuses to start, revision mismatch | Cache staged a snapshot other than the pinned one | Reconcile `contracts/model-revision.txt` with what the message reports |
+| Refuses to start, ambiguous snapshots | Cache holds several snapshots and no ref names the staged one | Re-stage the endpoint's cached model, or set `WEIGHTS_PATH` to the intended snapshot |
 | Jobs stuck `IN_QUEUE`, no workers | No GPU matching `gpuTypeIds` **and** `allowedCudaVersions` | `GET /v2/{id}/health` → `workers.running` stays 0. Widen the GPU list, or the CUDA filter |
 | Torch fails to initialise CUDA | cu130 wheel on an older host driver | Narrow `allowed_cuda_versions` to 13.x, or repin torch to cu12x and rebuild |
 | First job slow, later fine | Normal cold start | `pipeline_loaded` duration in worker stdout |
