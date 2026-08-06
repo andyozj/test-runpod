@@ -1,8 +1,8 @@
 # Design decisions and trade-offs
 
-**Date:** 2026-08-07 · **Depth:** [`docs/specs/00-09`](specs/00-overview.md) · **Evidence:** [`BENCHMARKS.md`](../BENCHMARKS.md)
+**Date:** 2026-08-07 · **Evidence:** [`BENCHMARKS.md`](../BENCHMARKS.md), [`RUNBOOK.md`](RUNBOOK.md), the code
 
-The consolidated decision log: what was chosen, what was rejected, and what each choice knowingly gave up. Each section links the spec that carries the full reasoning and the measurement that tested it, where one exists. Numbers are quoted from `BENCHMARKS.md` (measured 2026-08-06, N=3-10 per cell) or from the code.
+The design record: what was chosen, what was rejected, and what each choice knowingly gave up. Each section carries its reasoning here and links the measurement or code path that tested it. Numbers are quoted from `BENCHMARKS.md` (measured 2026-08-06, N=3-10 per cell) or from the code.
 
 | # | Decision | Choice | What it cost |
 |---|---|---|---|
@@ -33,7 +33,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** True cold start includes whole-repo staging on a fresh host: p50 89.9s, max 518.1s when staging lands cold. FlashBoot resume is 16.0s, warm 0.1s — the platform is trusted for steady traffic, minutes are budgeted for bursts from zero. The endpoint's Model field is console-only (no REST surface, verified against its OpenAPI 2026-08-06): one manual step in an otherwise scripted deploy.
 
-**Evidence.** [`BENCHMARKS.md`](../BENCHMARKS.md#cold-start-decomposed) cold-start table; [00 §Why cached models](specs/00-overview.md), [06 §Two weight-delivery variants](specs/06-build-deploy.md). `weights.resolve()` (`worker/src/worker/weights.py`) keeps all mechanisms live behind one code path: an explicit `WEIGHTS_PATH` wins, else the model cache. A deployment selects a mechanism by configuration alone.
+**Evidence.** [`BENCHMARKS.md`](../BENCHMARKS.md#cold-start-decomposed) cold-start table; [`RUNBOOK.md`](RUNBOOK.md) build and deploy procedures for both variants. `weights.resolve()` (`worker/src/worker/weights.py`) keeps all mechanisms live behind one code path: an explicit `WEIGHTS_PATH` wins, else the model cache. A deployment selects a mechanism by configuration alone.
 
 ## 2. Base image: `ubuntu:22.04`, not a CUDA base
 
@@ -43,7 +43,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** No preinstalled CUDA toolchain, and the two env vars the CUDA base used to provide (`NVIDIA_VISIBLE_DEVICES`, `NVIDIA_DRIVER_CAPABILITIES`) are set by hand. Safe because the worker compiles nothing at runtime; the wheels carry every library it loads. The wheel/driver pairing is enforced at scheduling instead: `allowed_cuda_versions` in the endpoint config makes a mismatch fail before a worker bills, not at model load.
 
-**Evidence.** `worker/Dockerfile` (header comments carry the reasoning); [06 §Layer order](specs/06-build-deploy.md).
+**Evidence.** `worker/Dockerfile` (header comments carry the reasoning and the layer order: weights below application code, so a code change rebuilds one layer).
 
 ## 3. Model revision: discovered, not pinned
 
@@ -51,19 +51,19 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Choice.** The file is deleted. Cached models stage from the console's Model field, which has no revision control: a pin the platform cannot honour only ever produces a startup refusal. `worker/weights.py` discovers the loaded revision instead — the cache snapshot directory name is the commit SHA; a baked build writes a `MANIFEST.json` (`worker/scripts/fetch_weights.py`, run only under `BAKE_WEIGHTS=true`) for the same purpose — and reports `model_version` as `<model_id>@<revision>` on every response.
 
-**Trade-off accepted.** The staged weights can drift from what was benchmarked. Three bounds: every result names the revision it was generated with, so drift is visible per-image rather than silent; [07](specs/07-testing.md) specifies a `sha256` comparison of weight files across variants, unwritten while one variant is deployed (the e2e suite is 7 cases); and the resolver refuses to start when several snapshots coexist with no `refs/main` naming the staged one — RunPod's own example sorts and takes the first, which would run a model the response then misattributes.
+**Trade-off accepted.** The staged weights can drift from what was benchmarked. Three bounds: every result names the revision it was generated with, so drift is visible per-image rather than silent; a `sha256` comparison of weight files across variants is specified future work, unwritten while one variant is deployed (the e2e suite is 7 cases); and the resolver refuses to start when several snapshots coexist with no `refs/main` naming the staged one — RunPod's own example sorts and takes the first, which would run a model the response then misattributes.
 
-**Evidence.** [06 §Revision: discovered, not pinned](specs/06-build-deploy.md); `worker/src/worker/weights.py:resolve()`; [07 §E2E](specs/07-testing.md) weight-variant hash case, specified as future work.
+**Evidence.** `worker/src/worker/weights.py:resolve()`; `worker/scripts/fetch_weights.py` (`MANIFEST.json`); `worker/tests/e2e/test_endpoint.py` (7 cases, no weight-variant hash case).
 
 ## 4. Two tiers, one graded deliverable
 
 **Context.** The worker alone satisfies the brief. The gateway (auth, idempotency, reconciler, load shedding) is beyond it.
 
-**Choice.** The gateway is built as a fenced spike: local `docker compose` only, never hosted. Hosting adds nothing demonstrable — the endpoint is a public URL regardless — and adds a live liability: a credential-backed GPU spender exposed continuously with no per-key quota ([08](specs/08-production-readiness.md) gap #1 would need closing first). Package isolation is enforced by construction: separate virtualenvs, so torch can never reach the gateway nor FastAPI the worker.
+**Choice.** The gateway is built as a fenced spike: local `docker compose` only, never hosted. Hosting adds nothing demonstrable — the endpoint is a public URL regardless — and adds a live liability: a credential-backed GPU spender exposed continuously with no per-key quota (the top-ranked gap, see [`SECURITY.md`](../SECURITY.md) §Known and accepted). Package isolation is enforced by construction: separate virtualenvs, so torch can never reach the gateway nor FastAPI the worker.
 
-**Trade-off accepted.** Isolation forbids a shared package, so the contract exists twice. Options weighed in [02](specs/02-gateway-core.md#the-duplicated-contract): a third package (a third `pyproject.toml`, lockfile, and publish step for ~10 fields), relaxing isolation (loses the guarantee keeping both images honest), or duplicating with drift made detectable. Duplication won. Five files at the root — `contracts/generation-request.schema.json`, `error-codes.json`, `blocklist.json`, `normalisation.json`, `guardrail-corpus.json` — are the source of truth; both suites assert conformance, so changing a field fails both packages until both follow. The behaviour a shared package would have bought, without shipping a third package.
+**Trade-off accepted.** Isolation forbids a shared package, so the contract exists twice. Options weighed: a third package (a third `pyproject.toml`, lockfile, and publish step for ~10 fields), relaxing isolation (loses the guarantee keeping both images honest), or duplicating with drift made detectable. Duplication won. Five files at the root — `contracts/generation-request.schema.json`, `error-codes.json`, `blocklist.json`, `normalisation.json`, `guardrail-corpus.json` — are the source of truth; both suites assert conformance, so changing a field fails both packages until both follow. The behaviour a shared package would have bought, without shipping a third package.
 
-**Evidence.** [02 §The duplicated contract](specs/02-gateway-core.md); `contracts/`; conformance tests in `worker/tests/unit/test_contracts.py` and `gateway/tests/unit/test_contracts.py`.
+**Evidence.** `contracts/`; conformance tests in `worker/tests/unit/test_contracts.py` and `gateway/tests/unit/test_contracts.py`.
 
 ## 5. Async-only interface
 
@@ -73,7 +73,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** A bare `curl` is two commands. `client/generate.py` covers the ergonomics.
 
-**Evidence.** [00 §Async as the default](specs/00-overview.md), [03 §Async only](specs/03-facades.md).
+**Evidence.** `gateway/src/gateway/api/` routes; `client/generate.py`; [`gateway/README.md`](../gateway/README.md) endpoint list.
 
 ## 6. The result is the image, not a reference
 
@@ -81,13 +81,13 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Choice.** Reverted to inline base64. RunPod's surface is fixed — `GET /status/{job_id}` returns the handler's output verbatim, and there is nowhere else a direct caller can fetch from — so a storage key hands the reviewer a reference they cannot resolve without running the gateway. The graded tier must not depend on the ungraded one.
 
-**Trade-off accepted.** ~2.7MB per completed-job poll, and no pushed transport can carry the result. Measured at the worst case: 1536² PNG is 2.85MB base64, JPEG 0.49MB (5.8x smaller), both inside the platform caps. Object storage is [08](specs/08-production-readiness.md) gap #10 — built once, removed as inert, to be re-added when a caller needs a pushed result.
+**Trade-off accepted.** ~2.7MB per completed-job poll, and no pushed transport can carry the result. Measured at the worst case: 1536² PNG is 2.85MB base64, JPEG 0.49MB (5.8x smaller), both inside the platform caps. Object storage is an open gap — built once, removed as inert, to be re-added when a caller needs a pushed result.
 
-**Evidence.** [03 §The result is the image](specs/03-facades.md); [`BENCHMARKS.md`](../BENCHMARKS.md) response-payload table.
+**Evidence.** [`BENCHMARKS.md`](../BENCHMARKS.md) response-payload table; `worker/src/worker/handler.py`.
 
 ## 7. Ports-and-adapters, in-memory persistence
 
-**Context.** The gateway needs a job store; Postgres is the specified production store ([02 §Data model](specs/02-gateway-core.md)).
+**Context.** The gateway needs a job store; Postgres is the specified production store, unimplemented.
 
 **Choice.** `core/` declares `Protocol` interfaces and imports nothing outward — enforced by `import-linter` in `make check`, not review. Persistence is `InMemoryJobRepository` behind the same protocol: a compose file starting a database nothing needs would be scenery. The swap is one binding in the composition root (`gateway/src/gateway/main.py`).
 
@@ -105,9 +105,9 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Choice.** `estimated_wait = (inQueue / capacity) × AVG_JOB_S`; over 120s, `submit` fails with `429 QUEUE_SATURATED` and `Retry-After = ceil(wait × uniform(0.8, 1.2))`. A raw depth threshold is meaningless on its own — 20 queued jobs are comfortable against 50 workers and hopeless against 3 — and a time threshold survives a `max_workers` change. The jitter prevents every shed client returning at the same instant and converting one spike into a synchronised second one. Health is refreshed on the reconciler's existing 2s tick and cached, not fetched per request: zero hot-path latency, zero extra upstream calls. On a missing or stale reading (>30s), submissions pass — the one deliberate fail-open, because load shedding is an optimisation and refusing all traffic for an unmeasurable queue converts a monitoring failure into an outage.
 
-**Trade-off accepted.** The estimate counts a running worker as available capacity, so it is a lower bound and real waits skew longer. `AVG_JOB_S` is a constant fed by the measured p50 (21.8s at 1024²/28 steps; shipped default 22.0), not adaptive per configuration ([08](specs/08-production-readiness.md) gap #9).
+**Trade-off accepted.** The estimate counts a running worker as available capacity, so it is a lower bound and real waits skew longer. `AVG_JOB_S` is a constant fed by the measured p50 (21.8s at 1024²/28 steps; shipped default 22.0), not adaptive per configuration: a 50-step 1536² job is estimated the same as a 20-step 512² one.
 
-**Evidence.** [02 §Queue pressure](specs/02-gateway-core.md); `service.py:_check_queue_pressure`, `_retry_after_s`; [`BENCHMARKS.md`](../BENCHMARKS.md#named-outputs) named outputs. The queue itself was measured under a 4x burst: 12 jobs against 3 workers drained linearly at ~11.6s per position, no failures — shedding guards the cost ceiling, not latency.
+**Evidence.** `service.py:_check_queue_pressure`, `_retry_after_s`; [`BENCHMARKS.md`](../BENCHMARKS.md#named-outputs) named outputs. The queue itself was measured under a 4x burst: 12 jobs against 3 workers drained linearly at ~11.6s per position, no failures — shedding guards the cost ceiling, not latency.
 
 ## 9. Idempotency: identity, ordering, release
 
@@ -121,7 +121,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** A `request_hash` per row (a key reused with a different body is `409 IDEMPOTENCY_CONFLICT` — silently returning the first job hands the caller an image of something they did not ask for), and ordering constraints in `submit` that the docstrings must carry.
 
-**Evidence.** [02 §Idempotency](specs/02-gateway-core.md), [03 §Idempotency](specs/03-facades.md); `service.py:submit`, `_shed_if_over_capacity`; the race is tested with genuinely concurrent inserts — a sequential test passes against the broken implementation.
+**Evidence.** `service.py:submit`, `_shed_if_over_capacity`; the race is tested with genuinely concurrent inserts — a sequential test passes against the broken implementation.
 
 ## 10. A reconciler, not webhooks and not per-request polling
 
@@ -133,17 +133,17 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** Up to one tick (2s) of phantom latency between completion and the gateway noticing, and progress resolution bounded at ~10 updates per 22s generation. Today N gateway replicas would mean N reconcilers polling in parallel; a second instance is safe only through the lease semantics already specified in `claim_unresolved`, and production would run the reconciler as a separate deployment.
 
-**Evidence.** [02 §The reconciler](specs/02-gateway-core.md); `gateway/src/gateway/workers/reconciler.py`; `runpod_client.py:submit_envelope_s` (the 90.6 is a doctest); `main.py:submit_grace_s`.
+**Evidence.** `gateway/src/gateway/workers/reconciler.py`; `runpod_client.py:submit_envelope_s` (the 90.6 is a doctest); `main.py:submit_grace_s`.
 
 ## 11. Guardrails: duplicated, fail-closed, crash ≠ block
 
-**Context.** `diffusers` FLUX pipelines ship no safety checker; whatever is not added here does not exist. And the RunPod endpoint is independently reachable by anyone holding the account API key — the gateway cannot be assumed to be the only door ([08](specs/08-production-readiness.md) gap #4, not closable from this side).
+**Context.** `diffusers` FLUX pipelines ship no safety checker; whatever is not added here does not exist. And the RunPod endpoint is independently reachable by anyone holding the account API key — the gateway cannot be assumed to be the only door — not closable from this side, since the RunPod key is account-scoped and cannot be narrowed.
 
 **Choice.** The same normalised blocklist runs at both tiers, loaded from one contract file; the gateway's is the chain meant to grow (it runs before GPU spend and can afford a model call), the worker's stays model-free (it runs on billed GPU time). A raising guardrail stops the request — fail-open for a safety control means the system reports itself protected while unprotected. But a crash is reported as `INFERENCE_FAILED`, never `PROMPT_BLOCKED`/`IMAGE_BLOCKED`: a block is a policy verdict, terminal until the prompt changes; a crash is an infra fault, retryable as-is. Conflating them lies to retrying agents and makes a guardrail outage arrive as a block-rate spike. The image hook runs before any upload, so a blocked image never reaches a reachable URL.
 
 **Trade-off accepted.** The worker's check spends billed GPU milliseconds on every job, and the blocklist is matching machinery, not a classifier — it stops naive cases and proves the hook is wired; real classification is the unbuilt chain member.
 
-**Evidence.** [04](specs/04-guardrails.md); `contracts/blocklist.json`, `normalisation.json`, `guardrail-corpus.json`; both suites assert identical verdicts over the shared corpus.
+**Evidence.** `worker/src/worker/guardrails.py`, `gateway/src/gateway/core/guardrails.py`; `contracts/blocklist.json`, `normalisation.json`, `guardrail-corpus.json`; both suites assert identical verdicts over the shared corpus.
 
 ## 12. No negative prompt
 
@@ -153,7 +153,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** Callers wanting negatives are refused. Adding it later is a schema change and a pass-through. The 2× claim went unmeasured: the input schema deliberately omits the field, so it is not measurable through the deployed contract — recorded as descoped in `BENCHMARKS.md` rather than asserted.
 
-**Evidence.** [01 §Why there is no negative prompt](specs/01-worker.md); [`BENCHMARKS.md`](../BENCHMARKS.md#descoped-and-why) descoped table.
+**Evidence.** `worker/src/worker/schemas.py` (no `negative_prompt` field); [`BENCHMARKS.md`](../BENCHMARKS.md#descoped-and-why) descoped table.
 
 ## 13. GPU and defaults chosen by $/image
 
@@ -163,7 +163,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** The 48GB floor is a policy artifact: this worker keeps everything resident in bf16 (~34GB). Offload (~27GB) or fp8 (~14GB) run FLUX on smaller cards, trading seconds per job — scoped in the README, and the planned 4090 floor test was dropped because it would only prove this policy's own requirement.
 
-**Evidence.** [`BENCHMARKS.md`](../BENCHMARKS.md) GPU-tier and steps-sweep tables; [09](specs/09-benchmarks.md) methodology (fixed seed, one variable at a time, N stated per cell).
+**Evidence.** [`BENCHMARKS.md`](../BENCHMARKS.md) GPU-tier and steps-sweep tables; methodology in its header (fixed seed, one variable at a time, N stated per cell), raw records in `benchmarks/raw.jsonl`.
 
 ## 14. CI/CD: publish on tags, deploy by hand, detect after
 
@@ -173,7 +173,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** The smoke test is detection, not prevention: `deploy` has already mutated the endpoint when it runs, so a failure there means a manual rollback — the same workflow with the previous tag, which works only because tags are immutable. Prevention needs a second endpoint and a traffic switch the platform does not give for free. The baked image never builds in CI: ~45GB against ~14GB of runner disk.
 
-**Evidence.** `.github/workflows/deploy.yml`; [06 §CI/CD](specs/06-build-deploy.md), [§Deploy and rollback](specs/06-build-deploy.md).
+**Evidence.** `.github/workflows/deploy.yml`; [`RUNBOOK.md`](RUNBOOK.md) §Deploy via GitHub Actions and §Rollback.
 
 ## 15. Observability: stdout is the surface
 
@@ -183,7 +183,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** No metrics export, no alerting, no spans — correlation without latency breakdown. Cold-start *failures* are invisible from every surface: the container never reaches the handler, so nothing is emitted, and only synthetic probing detects them. Stated in the runbook rather than discovered.
 
-**Evidence.** [05](specs/05-observability.md); [`STANDARDS.md`](../STANDARDS.md) §8; [08](specs/08-production-readiness.md) gaps #3, #6.
+**Evidence.** [`STANDARDS.md`](../STANDARDS.md) §8; `gateway/src/gateway/observability/`, `worker/src/worker/logging.py`; [`RUNBOOK.md`](RUNBOOK.md) §What is visible from where.
 
 ## 16. Testing: the constraint is the architecture
 
@@ -193,7 +193,7 @@ The consolidated decision log: what was chosen, what was rejected, and what each
 
 **Trade-off accepted.** Fakes assert against RunPod's documented contract; if the real platform diverges, only the e2e tier catches it — and it did: the error-envelope-as-string wire format was discovered by the live e2e suite on 2026-08-06, the class of bug nothing GPU-free can find. Current counts: 97 worker unit tests plus 7 e2e against the live endpoint; 240 gateway tests.
 
-**Evidence.** [07](specs/07-testing.md); [`STANDARDS.md`](../STANDARDS.md) §9; [01 §Errors](specs/01-worker.md) for the e2e-found wire format; README §Current state for counts.
+**Evidence.** [`STANDARDS.md`](../STANDARDS.md) §9; `worker/tests/`, `gateway/tests/`; [`README.md`](../README.md#current-state) §Current state for counts.
 
 ## Known limits
 
@@ -201,7 +201,7 @@ What the current design does not do, each with the reason that is acceptable for
 
 - **Single-process gateway.** Breaker state and the health cache are in-memory; N replicas means N reconcilers. One local compose instance is the deployment; the multi-instance requirements are specified (lease semantics, shared breaker state) rather than built.
 - **In-memory persistence.** Jobs are lost on restart and evicted after an hour. Postgres is one binding away behind the same protocol; a database nothing demonstrable needs would be scenery.
-- **No per-key rate limit or spend cap.** `MAX_ACTIVE_JOBS_PER_KEY=10` bounds concurrent jobs, not request rate or spend; a key under the cap can submit indefinitely. Top-ranked gap in [08](specs/08-production-readiness.md), and the reason the gateway is not hosted.
+- **No per-key rate limit or spend cap.** `MAX_ACTIVE_JOBS_PER_KEY=10` bounds concurrent jobs, not request rate or spend; a key under the cap can submit indefinitely. Top-ranked gap, and the reason the gateway is not hosted; also recorded in [`SECURITY.md`](../SECURITY.md).
 - **No rate limiting by IP.** Every `/v1` route already requires a key; anonymous traffic never reaches a spend path, so identity-based controls come first.
 - **Endpoint id appears in git history.** Redacted from the tree (`17ebd0c`), not from history. Accepted: calling the endpoint requires the RunPod API key regardless, and the id is supplied to the reviewer anyway.
 - **The endpoint is a second door with one shared key.** Account-scoped, identical for every holder, not narrowable. Not closable from this side; mitigated by key hygiene and by duplicating the guardrail into the worker.
@@ -209,4 +209,4 @@ What the current design does not do, each with the reason that is acceptable for
 - **Prompt length is a proxy.** The 2000-character cap approximates T5's 512-token limit; a dense prompt inside the cap truncates silently. Exact validation means loading the tokenizer for a rare case.
 - **`flag` verdicts have no consumer.** Recorded from day one so a review queue starts with history; today `flag` is `allow` plus an audit line.
 - **One manual deploy step.** The cached-model Model field is console-only; recorded in the runbook, to be folded into `apply_endpoint.py` when the API grows the field.
-- **Single region, no backup drill, no load test.** The failure domains of a real service, out of scope for a graded exercise; enumerated with costs in [08](specs/08-production-readiness.md) rather than left implied.
+- **Single region, no backup drill, no load test.** The failure domains of a real service, out of scope for a graded exercise; named here rather than left implied.
