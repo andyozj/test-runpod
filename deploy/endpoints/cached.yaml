@@ -7,7 +7,8 @@
 # Runs the ~2.9GB slim image: no weights baked in, and the worker resolves them
 # from the cache because WEIGHTS_PATH is unset. No code change.
 #
-# BETA. If it misbehaves the fallback is baked.yaml, which needs no new
+# Shipped 2026-08 ("model store"); config is console-only for the Model
+# field. If it misbehaves the fallback is baked.yaml, which needs no new
 # infrastructure — a different tag and a different config file.
 #
 # No network volume and no datacenter pin: nothing here provisions storage, so
@@ -16,9 +17,11 @@
 name: flux-worker-cached
 image_repository: ghcr.io/andyozj/flux-worker
 
+# L40S only, by decision 2026-08-06: one GPU type keeps every measured number
+# on one card. The cost is queueing instead of falling back when L40S is
+# scarce — re-add "NVIDIA A100 80GB PCIe" here if that bites.
 gpu_types:
   - NVIDIA L40S
-  - NVIDIA A100 80GB PCIe
 
 workers:
   min: 0
