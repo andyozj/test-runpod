@@ -142,9 +142,6 @@ class JobService:
             ActiveJobLimitError: The caller is already at its active job cap.
             IdempotencyConflictError: The key was reused with a different body.
         """
-        self._check_queue_pressure()
-        await self._check_active_job_cap(ctx.api_key_id)
-
         verdict = self.guardrail.check(params.prompt)
         now = self.clock.now()
         job = Job(
@@ -168,6 +165,14 @@ class JobService:
             return Submission(job=stored, replayed=True)
         if stored.status is not JobStatus.QUEUED:
             return Submission(job=stored, replayed=False)
+
+        # Shedding must never reach a replay (returned above, costs nothing
+        # upstream) or a blocked prompt (also returned above). Checked here,
+        # after the insert, rather than before it, precisely so a replay
+        # resolves first — a caller retrying the request most likely to hit
+        # the cap must get its original job id back, not a 429 it can never
+        # recover the id from.
+        await self._shed_if_over_capacity(stored)
 
         runpod_job_id = await self.runpod.submit(
             stored.params.as_worker_input(ctx.correlation_id)
@@ -449,20 +454,58 @@ class JobService:
         if wait > self.max_queue_wait_s:
             raise QueueSaturatedError(retry_after_s=int(wait) + 1)
 
+    async def _shed_if_over_capacity(self, job: Job) -> None:
+        """Reject a freshly inserted, not-yet-submitted job under load.
+
+        Only ever called on a job that is already stored (see `submit`), so
+        the row exists whether or not this sheds it. On shedding, the row is
+        marked FAILED rather than left QUEUED with no upstream id — otherwise
+        `reconcile` would later treat it as an orphaned submit and dispatch it
+        anyway, which is exactly the cost shedding exists to avoid.
+
+        Args:
+            job: The job just inserted, still QUEUED.
+
+        Raises:
+            QueueSaturatedError: The estimated wait exceeds the threshold.
+            ActiveJobLimitError: The caller is already at its active job cap.
+        """
+        try:
+            self._check_queue_pressure()
+            await self._check_active_job_cap(job.context.api_key_id)
+        except (QueueSaturatedError, ActiveJobLimitError) as exc:
+            await self.repository.mark_failed(
+                job.id, ErrorCode.QUEUE_SATURATED, str(exc), JobStatus.FAILED
+            )
+            raise
+
     async def _check_active_job_cap(self, api_key_id: str) -> None:
         """Reject once the caller already has the maximum unresolved jobs.
 
         Counts non-terminal jobs only: a completed, failed, cancelled or
         timed-out job frees the slot immediately.
 
+        Called after the triggering job itself has already been inserted (see
+        `_shed_if_over_capacity`), so `active` counts that job too — the cap
+        is exceeded once `active` is strictly greater than the max, not `>=`.
+
+        Race note: correct today only because, for the in-memory repository,
+        `count_active` never awaits and nothing between this job's insert and
+        this count yields to another task — CPython's cooperative scheduler
+        never interleaves them. Nothing in the `JobRepository` protocol
+        guarantees that. A database-backed repository's `count_active` is a
+        real I/O `await`, which reopens this as a genuine check-then-act race
+        unless that repository enforces the cap itself (e.g. an atomic
+        insert-and-count, or a per-key row lock).
+
         Args:
             api_key_id: The caller's identity.
 
         Raises:
-            ActiveJobLimitError: The caller is at the cap.
+            ActiveJobLimitError: The caller is over the cap.
         """
         active = await self.repository.count_active(api_key_id)
-        if active >= self.max_active_jobs_per_key:
+        if active > self.max_active_jobs_per_key:
             raise ActiveJobLimitError(retry_after_s=int(self.avg_job_s) + 1)
 
     @property

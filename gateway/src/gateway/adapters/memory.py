@@ -245,6 +245,12 @@ class InMemoryJobRepository:
     async def count_active(self, api_key_id: str) -> int:
         """Count a caller's non-terminal jobs, for the per-key active cap.
 
+        Deliberately lock-free: a plain synchronous read with no internal
+        `await`. `JobService._check_active_job_cap` relies on that — it's
+        what makes its check-then-act race-free under this repository. A
+        real I/O-backed repository does not get that for free; see the race
+        note there before reusing this shape against a database.
+
         Args:
             api_key_id: The caller to count.
 

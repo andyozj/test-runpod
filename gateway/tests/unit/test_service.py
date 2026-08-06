@@ -501,3 +501,45 @@ async def test_active_job_cap_is_scoped_per_key(
     other = await service.submit(PARAMS, ctx(api_key_id="other"))
 
     assert other.job.status is JobStatus.QUEUED
+
+
+async def test_a_replay_at_the_cap_still_returns_its_original_job(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    """The caller most likely to retry is the one already at the cap."""
+    service = _capped_service(repository, runpod, guardrail, clock, cap=1)
+    first = await service.submit(PARAMS, ctx(key="retry-me"))
+
+    replay = await service.submit(PARAMS, ctx(key="retry-me"))
+
+    assert replay.replayed
+    assert replay.job.id == first.job.id
+
+
+async def test_active_job_cap_holds_under_concurrent_submissions(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    """Pins today's accidental atomicity — see the race note on `_check_active_job_cap`."""
+    cap = 3
+    attempts = cap + 5
+    service = _capped_service(repository, runpod, guardrail, clock, cap=cap)
+
+    results = await asyncio.gather(
+        *(
+            service.submit(GenerationParams(prompt=f"job {i}"), ctx())
+            for i in range(attempts)
+        ),
+        return_exceptions=True,
+    )
+
+    succeeded = [r for r in results if not isinstance(r, BaseException)]
+    rejected = [r for r in results if isinstance(r, ActiveJobLimitError)]
+    assert len(succeeded) == cap
+    assert len(rejected) == attempts - cap
+    assert await repository.count_active("demo") == cap
