@@ -184,23 +184,23 @@ The production decision rule:
 
 1. **Model hosted on HuggingFace: cached models.** RunPod's model store stages from HF and pre-loads the weights on host machines before a worker starts. FLUX.1-dev is on HF, so this is what is deployed.
 2. **Model not on HF (private or custom weights): network volume.** Cached models stage from HF only, so a volume becomes the delivery mechanism, and its costs (datacenter pin, per-GB bill, population step) are accepted rather than chosen.
-3. **Baked image: brief compliance, plus the one fallback property a volume lacks.** It can be built and pushed *ahead* of an incident; recovering via volume means populating it during one.
+3. **Baked image: brief compliance, not a proven fallback.** It has never been pushed or deployed. In principle it is the only fallback buildable *before* an incident; in practice the push is the unproven step: the weights land in a single ~33GB layer, which may exceed registry layer caps, and CI cannot build it at all (14GB runner disk). Until a 45GB push is demonstrated, the honest recovery path for a cached-staging outage is populating a network volume (~1h of Pod time) despite its costs.
 
 | | Baked (~45GB) | **Cached (~2.9GB)** |
 |---|---|---|
 | Fresh-worker scale-up | Pull 45GB | Pull 2.9GB; host already holds the model |
-| Build and push | 30-60 min, and may exceed registry layer caps | Minutes |
+| Build and push | 30-60 min estimated, never attempted; one ~33GB weights layer may exceed registry caps | Minutes |
 | Storage cost | Registry only | **None** |
 | Weight transfer | Billed at build | **Unbilled, pre-staged** |
 | Maturity | Stable | **Shipped 2026-08**, no beta label; limits: one model per endpoint, all quantizations stage together |
 
 A deliberate deviation, stated rather than hidden. Staging pulls the whole repo, so the ~24GB of duplicate single-file weights come along: unbilled, and not our disk.
 
-**For this model, a network volume was tried and dropped.** FLUX.1-dev is on HF, so the volume competed with cached models and lost: it costs a datacenter pin that narrows the GPU pool exactly when scaling up under load (the moment it was meant to help), plus a per-GB bill and a population step. It is not kept as a fallback either: a volume is only a fallback if it is *already populated*, and populating one costs everything removing it avoided. The fallback is the baked image, already a build target. For weights that are not on HF, rule 2 above applies and the volume stops being a choice.
+**For this model, a network volume was tried and dropped.** FLUX.1-dev is on HF, so the volume competed with cached models and lost: it costs a datacenter pin that narrows the GPU pool exactly when scaling up under load (the moment it was meant to help), plus a per-GB bill and a population step. It is not kept as a *standing* fallback: a volume is only a fallback if it is *already populated*, and populating one costs everything removing it avoided. But no fallback here is exercised; if cached staging ever breaks, populating a volume is the recovery path that is known to work, while the baked push is not (rule 3). For weights that are not on HF, rule 2 above applies and the volume stops being a choice.
 
 `weights.resolve()` tries the configured path, then the model cache, so a deployment picks a mechanism by configuration alone. The staged snapshot is identified through the cache's `refs/main`, and the revision it actually holds is reported on every result; the worker refuses to start only when several snapshots coexist with no ref naming the staged one. RunPod's own example picks an arbitrary snapshot in that case, which would misattribute every image.
 
-The deployed (cached) variant is what [`BENCHMARKS.md`](BENCHMARKS.md) measures; the baked variant is built but not deployed, so it carries no numbers.
+The deployed (cached) variant is what [`BENCHMARKS.md`](BENCHMARKS.md) measures; the baked variant has never been pushed or deployed, so it carries no numbers.
 
 Two details that will otherwise cost you an hour each:
 

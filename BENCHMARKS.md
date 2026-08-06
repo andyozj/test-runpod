@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured 2026-08-06 against endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-72e537d-slim`, GPU RTX PRO 6000 MIG 48GB (requested: NVIDIA L40S; platform substituted within the 48GB tier), model per response `model_version`. Rate $1.75/hr (2026-08-05, re-verify before quoting). Raw data: `benchmarks/raw.jsonl` (156 records). Methodology: `docs/specs/09-benchmarks.md`; fixed seed, one variable at a time.
+Measured 2026-08-07 against endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-72e537d-slim`, GPU RTX PRO 6000 MIG 48GB (requested: NVIDIA L40S; platform substituted within the 48GB tier), model per response `model_version`. Rate $1.75/hr (2026-08-05, re-verify before quoting). Raw data: `benchmarks/raw.jsonl` (156 records). Methodology: `docs/specs/09-benchmarks.md`; fixed seed, one variable at a time.
 
 **Read the N column before any percentile.** N is 3-10 per cell: sequential probes, no sustained load. Enough to rank options (step count, GPU tier, image format); not literal latency guarantees. SLO-grade p50/p95 needs a proper load test (e.g. Locust) at production concurrency, which this harness does not do.
 
@@ -86,7 +86,7 @@ Burst of 6 against workersMax=3: queue wait p50 27.1s, max 50.6s. Execution time
 |---|---|
 | Exact-GPU pinning | Not possible on serverless: scheduling is pool-based (the v2 API takes `gpu.pools`; the catalog assigns each card a pool), which is how an "NVIDIA L40S" request was served by an RTX PRO 6000 MIG. The levers are pool, CUDA filter and datacenter. Per-worker `gpuTypeId` exists in the v2 workers API, 403 on this account today, as are v2 catalog and GraphQL |
 | 4090 floor test | Dropped: it would only prove this worker's resident-bf16 policy needs >34GB. Offload (~27GB) and fp8 (~14GB) run FLUX on smaller cards; the claim is scoped in the README instead |
-| Weight-delivery three-way | Only cached models is deployed; volume was dropped in design, baked is built but not deployed |
+| Weight-delivery three-way | Only cached models is deployed; volume was dropped in design, baked was never pushed or deployed |
 | CFG 2× claim | Not measurable through the deployed contract: the input schema deliberately omits `true_cfg_scale` |
 
 ## Threats to validity

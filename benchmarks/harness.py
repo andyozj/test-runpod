@@ -794,7 +794,7 @@ def render(cfg: dict[str, Any], tag: str) -> str:
         "|---|---|",
         '| Exact-GPU pinning | Not possible on serverless: scheduling is pool-based (the v2 API takes `gpu.pools`; the catalog assigns each card a pool), which is how an "NVIDIA L40S" request was served by an RTX PRO 6000 MIG. The levers are pool, CUDA filter and datacenter. Per-worker `gpuTypeId` exists in the v2 workers API, 403 on this account today, as are v2 catalog and GraphQL |',
         "| 4090 floor test | Dropped: it would only prove this worker's resident-bf16 policy needs >34GB. Offload (~27GB) and fp8 (~14GB) run FLUX on smaller cards; the claim is scoped in the README instead |",
-        "| Weight-delivery three-way | Only cached models is deployed; volume was dropped in design, baked is built but not deployed |",
+        "| Weight-delivery three-way | Only cached models is deployed; volume was dropped in design, baked was never pushed or deployed |",
         "| CFG 2× claim | Not measurable through the deployed contract: the input schema deliberately omits `true_cfg_scale` |",
         "",
         "## Threats to validity",

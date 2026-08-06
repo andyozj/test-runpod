@@ -84,7 +84,7 @@ Base: **`ubuntu:22.04`**, not a CUDA image. The torch wheel ships its own CUDA l
 
 Both are built from one image definition. The worker code is identical; `weights.resolve()` tries the configured path, then the model cache, so a deployment picks a mechanism by configuration alone.
 
-The decision rule, stated once: **cached models when the weights are on HuggingFace** (they are, here), **network volume when they are not** (cached models stage from HF only, so a volume stops being a choice and becomes the mechanism), **baked never in production**. The baked image exists because the brief asks for an image that includes the model, and because it is the one fallback that can be built *before* an incident rather than populated during one.
+The decision rule, stated once: **cached models when the weights are on HuggingFace** (they are, here), **network volume when they are not** (cached models stage from HF only, so a volume stops being a choice and becomes the mechanism), **baked never in production**. The baked image exists because the brief asks for an image that includes the model. Its theoretical fallback advantage (buildable *before* an incident rather than populated during one) is unproven: no baked image has ever been pushed, the weights land in a single ~33GB layer that may exceed registry layer caps, and CI cannot build it on a 14GB runner.
 
 **Baked.** `fetch_weights.py` runs at build time, weights land in the image, `WEIGHTS_PATH` points at the image path. ~45GB, no region constraint. A build target (`make build-baked`) because the brief names it; neither published nor deployed.
 
@@ -92,7 +92,7 @@ The decision rule, stated once: **cached models when the weights are on HuggingF
 
 **The resolver refuses to guess between snapshots.** RunPod's own example sorts the available snapshots and takes the first, which would run a model the response then misattributes, silently invalidating any comparison between endpoints. Ours takes the one named by `refs/main`, or the only one present, and otherwise refuses to start and names what it found. It does not compare against a pin; there is none (see *Revision: discovered, not pinned*).
 
-Recently shipped: RunPod's "model store", engineering write-up 2026-08-04; the docs carry no beta label. Its real caveats: one cached model per endpoint, whole-repo staging (all quantizations), and **console-only configuration** (the Model field has no REST API surface yet). The fallback is the baked image, already a build target: a tag and a config change, no new infrastructure.
+Recently shipped: RunPod's "model store", engineering write-up 2026-08-04; the docs carry no beta label. Its real caveats: one cached model per endpoint, whole-repo staging (all quantizations), and **console-only configuration** (the Model field has no REST API surface yet). The documented fallback is the baked image, a tag and a config change away, but untested: nothing that size has been pushed from this repo and the registry-cap question is open.
 
 ```dockerfile
 ARG BAKE_WEIGHTS=true
@@ -102,7 +102,7 @@ RUN --mount=type=secret,id=hf_token \
     fi
 ```
 
-**The network-volume variant below was tried and dropped.** It is kept here as the reasoning that produced the decision; nothing in the repo builds or configures it, and the fallback for cached models is the baked image, not a volume. A volume is only a fallback once it is *already populated*, and populating one costs everything removing it avoided.
+**The network-volume variant below was tried and dropped.** It is kept here as the reasoning that produced the decision; nothing in the repo builds or configures it, and the documented (untested) fallback for cached models is the baked image, not a volume. A volume is only a fallback once it is *already populated*, and populating one costs everything removing it avoided.
 
 Two consequences, which is what settled it:
 
