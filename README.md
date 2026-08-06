@@ -1,12 +1,24 @@
 # FLUX.1-dev on RunPod Serverless
 
-A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod using cached models — the platform pre-stages the weights on host machines. The baked-weights image is built and published too — see [Weight delivery](#weight-delivery).
+A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod using cached models — the platform pre-stages the weights on host machines. The baked-weights image is a one-command build target (`make build-baked`), not deployed — see [Weight delivery](#weight-delivery).
 
-> **Status:** live and verified 2026-08-06 — endpoint `7jrg4nu4b47fsv`, image `0.1.0-72e537d-slim`, L40S, weights via RunPod's model store. 7/7 e2e cases pass against it; committed samples with seeds in [`samples/`](samples/). `BENCHMARKS.md` is next and nothing below is presented as measured until it lands.
+> **Status:** live and verified 2026-08-06 — endpoint `<endpoint-id — supplied in the submission email>`, image `0.1.0-72e537d-slim`, 48GB GPU tier, weights via RunPod's model store. 7/7 e2e cases pass against it; committed samples with seeds in [`samples/`](samples/); measured results in [`BENCHMARKS.md`](BENCHMARKS.md) (156 records, raw data committed).
+
+## What's here
+
+Three tiers, in the order worth reading:
+
+| Tier | Where | What it is |
+|---|---|---|
+| **The deliverable** | [`worker/`](worker/), [`worker/Dockerfile`](worker/Dockerfile), [`deploy/endpoints/`](deploy/endpoints/), [`scripts/apply_endpoint.py`](scripts/apply_endpoint.py), [`docs/RUNBOOK.md`](docs/RUNBOOK.md), [`samples/`](samples/), [`client/generate.py`](client/generate.py) | The brief: handler, image, deployed endpoint, demo client, operations |
+| **The measurements** | [`BENCHMARKS.md`](BENCHMARKS.md), [`benchmarks/`](benchmarks/) | What the endpoint actually does under one variable at a time — steps, resolution, payload, concurrency, cold starts — harness, config and raw JSONL included |
+| **Beyond the brief** | [`gateway/`](gateway/) | A production-shaped API tier in front of the endpoint: auth, idempotency, job store, reconciler. Fenced off in [`gateway/README.md`](gateway/README.md) |
+
+Design record in [`docs/specs/`](docs/specs/00-overview.md). Engineering conventions in [`STANDARDS.md`](STANDARDS.md) — that file doubles as the working guide for the agentic coding process used to build this repo, which is why it spells out rules a human reviewer would take as given.
 
 ## Call it
 
-One command, prompt in, image out:
+One command against a warm worker, prompt in, image out:
 
 ```bash
 export RUNPOD_API_KEY=...        # your RunPod key
@@ -20,9 +32,11 @@ curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
 ```
 
 `/runsync` holds the connection and returns the finished output, so a warm job
-(~20-25s, 2.7MB — inside the 20MB cap) completes in a single call. A **cold**
-worker spends 30-60s loading the pipeline first and will outlast the hold, so
-warm the endpoint with one throwaway request before demonstrating.
+(~22s at the defaults, ~1.7MB of base64 — measured, `BENCHMARKS.md`) completes
+in a single call. A **cold** worker takes longer than the hold: ~15s p50 when
+FlashBoot resumes an idle worker, but minutes when staging lands on a fresh
+host (measured p50 304s, max 518s). Warm the endpoint with one throwaway
+request before demonstrating.
 
 For anything real, submit and poll — that is what the client does, with live
 progress and observed wall time:
@@ -39,10 +53,9 @@ python client/generate.py "a red fox in falling snow" --out fox.png
 
 The client uses `runpod.Endpoint` rather than raw HTTP — the SDK owns the
 polling loop, the `{"input": ...}` envelope and the retry semantics, so ~15
-lines replace ~150. The `curl` above remains the zero-dependency path.
+lines replace ~150. The same operations by hand:
 
 ```bash
-# the same thing by hand
 curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/run" \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
@@ -58,16 +71,6 @@ after `/run`, and **1 minute** after `/runsync`. Anything polling — the client
 the gateway reconciler — must fetch inside that window; afterwards `/status`
 has nothing left to return.
 
-Or, against a warm worker, one command — `/runsync` holds the connection and returns the finished image (~20-25s):
-
-```bash
-curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
-  -H "Authorization: Bearer $RUNPOD_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"input": {"prompt": "a red fox in falling snow"}}' \
-  | jq -r '.output.image_base64' | base64 -d > fox.png
-```
-
 `GET /status/{id}` returns the handler's output verbatim, so the completed response carries the image inline:
 
 ```json
@@ -81,13 +84,15 @@ curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
     "height": 1024,
     "num_inference_steps": 28,
     "guidance_scale": 3.5,
-    "model_version": "black-forest-labs/FLUX.1-dev@0ef5fff",
+    "model_version": "black-forest-labs/FLUX.1-dev@<revision>",
     "timings": {"inference_s": 21.4, "encode_s": 0.3}
   }
 }
 ```
 
-While a job runs, `status` polls return per-step progress:
+While a job runs, `status` polls return progress, throttled to ~10% strides
+(each report costs a platform round trip, so per-step updates would tax the
+GPU loop for nothing):
 
 ```json
 {"status": "IN_PROGRESS", "output": {"step": 12, "total": 28, "percent": 43}}
@@ -146,7 +151,12 @@ make doctest       # the executable examples
 make weights-check # verify the weight filter against HF. Downloads nothing.
 ```
 
-`make check` is exactly what CI runs. **No unit or integration test requires a GPU, model weights, or an external network service** — that is a design constraint, not a preference, and it is what forces the pipeline behind an injectable accessor rather than a module-level global.
+CI runs the same gates as `make check` — both packages, the import-linter
+layering contract, and the CLI-tool lint — plus the doctests. **No unit or
+integration test requires a GPU, model weights, or an external network
+service** — that is a design constraint, not a preference, and it is what
+forces the pipeline behind an injectable accessor rather than a module-level
+global.
 
 ## Build and deploy
 
@@ -154,17 +164,16 @@ The deployed image is ~2.9GB — no weights, and no CUDA base image, since the t
 
 ```bash
 export HF_TOKEN=...   # requires accepting the FLUX.1-dev licence on HuggingFace
-export IMAGE=ghcr.io/OWNER/flux-worker TAG=0.1.0-$(git rev-parse --short HEAD)
 
-make build-slim IMAGE=$IMAGE TAG=$TAG   # ~2.9GB, deployed
-docker push $IMAGE:$TAG-slim
+make build-slim       # tags ghcr.io/andyozj/flux-worker:0.1.0-<sha>-slim
+docker push ghcr.io/andyozj/flux-worker:0.1.0-$(git rev-parse --short HEAD)-slim
 ```
 
-`--platform linux/amd64` is set in the Makefile. Without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
+`IMAGE` and `TAG` have working defaults in the Makefile (`ghcr.io/andyozj/flux-worker`, `0.1.0-<git-sha>`); override them on the command line for another registry. `--platform linux/amd64` is set in the Makefile — without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
 
 ### Weight delivery
 
-The brief says *"Build a Docker image that includes your serverless handler and the model."* Both images build from one `Dockerfile` via `BAKE_WEIGHTS`, and the baked one is published — but **the deployed endpoint uses RunPod's cached models**, which pre-stage the repository on host machines before a worker starts.
+The brief says *"Build a Docker image that includes your serverless handler and the model."* Both images build from one `Dockerfile` via `BAKE_WEIGHTS` — but **the deployed endpoint uses RunPod's cached models**, which pre-stage the repository on host machines before a worker starts. The baked image remains the documented fallback: buildable on demand, not published.
 
 | | Baked (~45GB) | **Cached (~2.9GB)** |
 |---|---|---|
@@ -178,9 +187,9 @@ A deliberate deviation, stated rather than hidden. Staging pulls the whole repo,
 
 **A network volume was tried and dropped.** Its cost is a datacenter pin that narrows the GPU pool exactly when scaling up under load — the moment it was meant to help — plus a per-GB bill and a population step. It is not kept as a fallback, because a volume is only a fallback if it is *already populated*, and populating one costs everything removing it avoided. The fallback is the baked image, already a build target.
 
-`weights.resolve()` tries the configured path, then the model cache — so a deployment picks a mechanism by configuration alone, and refuses to start if the cache holds a revision other than the pinned one. RunPod's own example picks an arbitrary snapshot, which would misattribute every image.
+`weights.resolve()` tries the configured path, then the model cache — so a deployment picks a mechanism by configuration alone. The staged snapshot is identified through the cache's `refs/main`, and the revision it actually holds is reported on every result; the worker refuses to start only when several snapshots coexist with no ref naming the staged one. RunPod's own example picks an arbitrary snapshot in that case, which would misattribute every image.
 
-All variants are benchmarked; methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
+The deployed (cached) variant is what [`BENCHMARKS.md`](BENCHMARKS.md) measures; the baked variant is built but not deployed, so it carries no numbers.
 
 Two details that will otherwise cost you an hour each:
 
@@ -191,13 +200,13 @@ Two details that will otherwise cost you an hour each:
 
 | | |
 |---|---|
-| Model | FLUX.1-dev, bf16, unquantized, revision pinned in `contracts/model-revision.txt` |
+| Model | FLUX.1-dev, bf16, unquantized. The loaded revision is discovered from the staged snapshot and reported on every result — cached models offer no revision control, so it is a reported fact, not a pin |
 | Inference | `diffusers.FluxPipeline`. No `torch.compile` — 3-10 min of compilation on every cold start is net slower for serverless traffic |
-| Weights | **Cached models.** RunPod pre-stages the repo on hosts; no datacenter pin, no storage cost. Volume and baked variants also built — see *Weight delivery* below |
-| GPU | L40S 48GB. bf16 weights are ~34GB resident (23.8GB transformer + ~9.5GB T5-XXL), plus activations — a 24GB card cannot hold the model |
+| Weights | **Cached models** (deployed). Baked image kept as the build-target fallback; network volume evaluated and dropped — see *Weight delivery* above |
+| GPU | 48GB tier. This worker keeps everything resident in bf16 (~34GB: 23.8GB transformer + ~9.5GB T5-XXL) for the fastest warm latency — under *that* policy 48GB is the floor. Smaller cards run FLUX fine with CPU offload (~27GB peak, fits 40GB) or fp8 quantization (fits 24GB), trading seconds per job for VRAM |
 | Concurrency | `concurrency_modifier = 1`. The worker is GPU-bound; a second concurrent job causes VRAM contention, not throughput |
 
-Full reasoning, including what is deliberately *not* built and what production would cost, is in [`docs/specs/`](docs/specs/00-overview.md). Engineering conventions are in [`STANDARDS.md`](STANDARDS.md).
+Full reasoning, including what is deliberately *not* built and what production would cost, is in [`docs/specs/`](docs/specs/00-overview.md).
 
 ### Diagrams
 
@@ -215,31 +224,32 @@ Each opens in Excalidraw and is editable.
 ## Repository
 
 ```
-contracts/          shared source of truth for both tiers
-worker/             the serverless worker — the graded deliverable
-  src/worker/       handler, pipeline, inference, guardrails, schemas
-  scripts/          fetch_weights.py
+contracts/           shared source of truth for both tiers
+worker/              the serverless worker — the graded deliverable
+  src/worker/        handler, pipeline, inference, guardrails, schemas
+  scripts/           fetch_weights.py
   Dockerfile
-client/generate.py  demo client, on RunPod's Python SDK
-gateway/            FastAPI tier (beyond the brief) — see gateway/README.md
-deploy/endpoints/   endpoint configuration as code
-scripts/            apply_endpoint.py
-docs/RUNBOOK.md     build, deploy, rollback, diagnosis
-docs/specs/         design, 10 documents
+client/generate.py   demo client, on RunPod's Python SDK
+BENCHMARKS.md        measured results — rendered, never hand-written
+benchmarks/          harness.py, config.json, raw.jsonl (the evidence)
+samples/             committed generations with their seeds
+gateway/             FastAPI tier (beyond the brief) — see gateway/README.md
+deploy/endpoints/    endpoint configuration as code
+scripts/             apply_endpoint.py
+docs/RUNBOOK.md      build, deploy, rollback, diagnosis
+docs/specs/          design, 10 documents
+STANDARDS.md         engineering conventions; guide for the agentic workflow
 ```
 
 ## Current state
 
 | | |
 |---|---|
-| Worker implemented and tested | Yes — 75 worker tests, no GPU required; e2e suite pre-written for the live endpoint |
-| Image | `ghcr.io/andyozj/flux-worker:0.1.0-44c9643-slim`, 2.9GB, public, no secrets in any layer |
-| Endpoint | Created 2026-08-06: `flux-worker-cached` (`7jrg4nu4b47fsv`), cached-model staging in progress |
-| First verified generation | **Done** — 2026-08-06, plus 7/7 live e2e cases and three committed samples |
-| `BENCHMARKS.md` | Not yet. Produced from a single measured run once verified |
-| Gateway | Core, async API and reconciler implemented with tests; runs locally via `compose.yaml` |
-
-Nothing in this README describes performance, because nothing has been measured yet. Every figure it will eventually carry comes from a run whose methodology is specified in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).
+| Endpoint | **Live** since 2026-08-06 — 7/7 e2e cases pass, three samples committed with seeds |
+| Image | `ghcr.io/andyozj/flux-worker:0.1.0-72e537d-slim`, 2.9GB, public, no secrets in any layer |
+| Worker | 70 unit tests (no GPU required) + 7 e2e against the live endpoint |
+| `BENCHMARKS.md` | Measured 2026-08-06 — 156 records incl. an A100 cross-tier run, raw JSONL committed, methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md) |
+| Gateway | Beyond-brief tier: core, async API, reconciler, 86 tests; containerised and in CI alongside the worker |
 
 ## Licence
 
