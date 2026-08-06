@@ -4,6 +4,8 @@ A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, depl
 
 > **Status:** live and verified 2026-08-06. Endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-b8d1f76-slim` (deployed via `deploy.yml`), 48GB GPU tier, weights via RunPod's model store. 7/7 e2e cases pass against it; committed samples with seeds in [`samples/`](samples/); measured results in [`BENCHMARKS.md`](BENCHMARKS.md) (156 records, raw data committed).
 
+[What's here](#whats-here) · [Call it](#call-it) · [Input](#input) · [Errors](#errors) · [Prerequisites](#prerequisites) · [Develop](#develop) · [Build and deploy](#build-and-deploy) · [Design](#design) · [Repository](#repository) · [Current state](#current-state) · [Author](#author) · [Licence](#licence)
+
 ## What's here
 
 One deliverable and two spikes. The spikes sit beside the brief, not inside it: each is self-contained, carries its own README, and the endpoint is callable without either.
@@ -12,7 +14,7 @@ One deliverable and two spikes. The spikes sit beside the brief, not inside it: 
 |---|---|---|
 | **The deliverable** | [`worker/`](worker/), [`worker/Dockerfile`](worker/Dockerfile), [`deploy/endpoints/`](deploy/endpoints/), [`scripts/apply_endpoint.py`](scripts/apply_endpoint.py), [`docs/RUNBOOK.md`](docs/RUNBOOK.md), [`samples/`](samples/), [`client/generate.py`](client/generate.py) | The brief: handler, image, deployed endpoint, demo client, operations. Package details in [`worker/README.md`](worker/README.md) |
 | **Spike: benchmarks** | [`benchmarks/`](benchmarks/), [`BENCHMARKS.md`](BENCHMARKS.md) | What the endpoint actually does under one variable at a time: steps, resolution, payload, concurrency, cold starts. Its rendered report backs every number quoted below. [`benchmarks/README.md`](benchmarks/README.md) |
-| **Spike: gateway** | [`gateway/`](gateway/) | A production-shaped API tier in front of the endpoint: auth, idempotency, job store, reconciler. Fenced off in [`gateway/README.md`](gateway/README.md) |
+| **Spike: gateway** | [`gateway/`](gateway/) | A production-shaped API tier in front of the endpoint: auth, idempotency, job store, reconciler. Endpoints, and the fence, in [`gateway/README.md`](gateway/README.md) |
 
 Design record in [`docs/specs/`](docs/specs/00-overview.md). Engineering conventions in [`STANDARDS.md`](STANDARDS.md). That file doubles as the working guide for the agentic coding process used to build this repo, so it spells out rules a human reviewer would take as given.
 
@@ -142,14 +144,33 @@ The encoding is forced by the platform: RunPod carries a job's error only as a s
 
 Every error carries a `suggestion` naming the next valid action, because callers include agents that cannot infer recovery from prose.
 
+## Prerequisites
+
+| Tool | Version | Needed for |
+|---|---|---|
+| [uv](https://docs.astral.sh/uv/) | any | every `make` target; it provisions the interpreter |
+| Python | 3.11 (`requires-python = ">=3.11,<3.12"`, both packages) | installed by `uv sync`, no system Python required |
+| `make` | any | the targets below |
+| Docker with buildx | any | `make build-slim`, `make build-baked`, the compose stack |
+| `curl`, `jq`, `base64` | any | the copy-paste call above |
+| RunPod account and API key | - | calling the endpoint, deploying, the e2e suite |
+| `HF_TOKEN`, FLUX.1-dev licence accepted | - | `make weights-check`, `make build-baked` |
+
+`make check` needs the first three rows only.
+
 ## Develop
 
 ```bash
+git clone https://github.com/andyozj/test-runpod.git && cd test-runpod
 make install       # sync both package environments
 make check         # format, lint, types, imports, tests + coverage gate
 make doctest       # the executable examples
 make weights-check # verify the weight filter against HF. Downloads nothing.
 ```
+
+Every variable either settings module reads is in [`.env.example`](.env.example), with its default and what happens when it is unset. Copy it to `.env`; `.env` is git-ignored. Calling the live endpoint needs two of them: `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID`.
+
+Workflow, gates and review expectations in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 The e2e suite is deselected by default and runs against the live endpoint:
 
@@ -174,7 +195,7 @@ docker push ghcr.io/andyozj/flux-worker:$(make -s print-tag)-slim
 
 Versioning is tag-driven: the most recent `v*` git tag names the version, the commit SHA makes the image tag immutable, and `make print-tag` shows the result. Override `IMAGE`/`TAG` on the command line for another registry. `--platform linux/amd64` is set in the Makefile; without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
 
-CD: `.github/workflows/deploy.yml` runs CI, builds, pushes and applies from one button (rollback = re-run with the previous tag); a `v*` tag push publishes the image without deploying. Details in the [RUNBOOK](docs/RUNBOOK.md).
+CD: `.github/workflows/deploy.yml` runs CI, builds, pushes and applies from one button (rollback = re-run with the previous tag); a `v*` tag push publishes the image without deploying. Details in the [RUNBOOK](docs/RUNBOOK.md). When something is broken, start at its [Diagnosis](docs/RUNBOOK.md#diagnosis) table: symptom, likely cause, the check that settles it, ordered by how often each is actually the cause.
 
 ### Weight delivery
 
@@ -217,7 +238,7 @@ Two details that will otherwise cost you an hour each:
 | GPU | 48GB tier. This worker keeps everything resident in bf16 (~34GB: 23.8GB transformer + ~9.5GB T5-XXL) for the fastest warm latency; under *that* policy 48GB is the floor. Smaller cards run FLUX fine with CPU offload (~27GB peak, fits 40GB) or fp8 quantization (fits 24GB), trading seconds per job for VRAM |
 | Concurrency | `concurrency_modifier = 1`. The worker is GPU-bound; a second concurrent job causes VRAM contention, not throughput |
 
-Full reasoning, including what is deliberately *not* built and what production would cost, is in [`docs/specs/`](docs/specs/00-overview.md).
+Decisions and their trade-offs, including the options rejected, are in [`docs/DESIGN.md`](docs/DESIGN.md). Full reasoning, including what is deliberately *not* built and what production would cost, is in [`docs/specs/`](docs/specs/00-overview.md).
 
 ### Diagrams
 
@@ -247,9 +268,14 @@ samples/             committed generations with their seeds
 gateway/             spike: FastAPI tier beyond the brief (gateway/README.md)
 deploy/endpoints/    endpoint configuration as code
 scripts/             apply_endpoint.py
+docs/README.md       documentation index
 docs/RUNBOOK.md      build, deploy, rollback, diagnosis
+docs/DESIGN.md       decisions and trade-offs
 docs/specs/          design, 10 documents
 STANDARDS.md         engineering conventions; guide for the agentic workflow
+CONTRIBUTING.md      workflow, gates, review expectations
+SECURITY.md          reporting a vulnerability
+.env.example         every variable either settings module reads
 ```
 
 ## Current state
@@ -261,6 +287,10 @@ STANDARDS.md         engineering conventions; guide for the agentic workflow
 | Worker | 97 unit tests (no GPU required) + 7 e2e against the live endpoint |
 | `BENCHMARKS.md` | Measured 2026-08-06; 156 records incl. an A100 cross-tier run, raw JSONL committed, methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md) |
 | Gateway | Spike, beyond the brief: core, async API, reconciler, 234 tests; containerised and in CI alongside the worker |
+
+## Author
+
+Andy Ong — [github.com/andyozj](https://github.com/andyozj)
 
 ## Licence
 
