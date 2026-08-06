@@ -1,6 +1,6 @@
 # Benchmarks (spike)
 
-Measurement harness for the deployed endpoint, one variable at a time: steps, resolution, payload, concurrency, cold starts, queueing, FlashBoot. Beyond the brief (the endpoint is callable without it), but the numbers quoted in the root README come from its output. Methodology: [`docs/specs/09-benchmarks.md`](../docs/specs/09-benchmarks.md).
+Measurement harness for the deployed endpoint, one variable at a time: steps, resolution, payload, concurrency, cold starts, queueing, FlashBoot. Beyond the brief (the endpoint is callable without it), but the numbers quoted in the root README come from its output. Methodology: fixed seed, one variable at a time, N stated per cell; stated in [`BENCHMARKS.md`](../BENCHMARKS.md).
 
 Intent: curiosity. The endpoint was live and the obvious questions had no measured answers: what a step costs, when cold start hurts, whether the 48GB tier beats an A100 on $/image. The harness answers them with small fixed-seed samples. It characterizes the endpoint; it does not load-test it.
 

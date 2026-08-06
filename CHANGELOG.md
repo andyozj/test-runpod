@@ -23,7 +23,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - Worker reports the model revision it loaded instead of pinning one.
 - Typed guardrail verdict, one status convention, no function-local imports in the gateway.
 - `VERSION` injected at gateway build time; every setting passed through `compose.yaml`.
-- README restructured into three tiers (deliverable, benchmarks spike, gateway spike); `.env.example`, specs 03/09 and the working notes reconciled against the tree.
+- README restructured into three tiers (deliverable, benchmarks spike, gateway spike); `.env.example` and the design write-up reconciled against the tree.
 - Gateway tests: 57 → 187 test functions (240 collected).
 
 ### Fixed
@@ -44,7 +44,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - Per-key non-terminal job cap bounds how much billable queue one key can hold.
 - CI hardening: third-party actions pinned to commit SHAs, `deploy.yml` injection risk removed (inputs passed via `env:`), checks gated before deploy, tag verified, smoke test added.
 - Gateway container runs as a non-root user.
-- Endpoint id redacted from the committed status note.
+- Endpoint id redacted from the committed documentation.
 
 ## [0.1.0] - 2026-08-06
 
@@ -59,7 +59,7 @@ First live deployment. Endpoint created from image `0.1.0-44c9643-slim`.
 - **Gateway spike**: domain core, adapters, async API and reconciler, behind an `import-linter` layering contract.
 - Demo client on RunPod's Python SDK; `compose.yaml` for a local gateway.
 - GPU-marked e2e suite against the live endpoint, written before deploy.
-- `STANDARDS.md`, specs `00`-`09`, `docs/RUNBOOK.md`, six architecture diagrams, committed samples with seeds.
+- `STANDARDS.md`, the design write-up, `docs/RUNBOOK.md`, six architecture diagrams, committed samples with seeds.
 
 ### Changed
 

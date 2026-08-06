@@ -16,7 +16,7 @@ One deliverable and two spikes. The spikes sit beside the brief, not inside it: 
 | **Spike: benchmarks** | [`benchmarks/`](benchmarks/), [`BENCHMARKS.md`](BENCHMARKS.md) | What the endpoint actually does under one variable at a time: steps, resolution, payload, concurrency, cold starts. Its rendered report backs every number quoted below. [`benchmarks/README.md`](benchmarks/README.md) |
 | **Spike: gateway** | [`gateway/`](gateway/) | A production-shaped API tier in front of the endpoint: auth, idempotency, job store, reconciler. Endpoints, and the fence, in [`gateway/README.md`](gateway/README.md) |
 
-Design record in [`docs/specs/`](docs/specs/00-overview.md). Engineering conventions in [`STANDARDS.md`](STANDARDS.md). That file doubles as the working guide for the agentic coding process used to build this repo, so it spells out rules a human reviewer would take as given.
+The design record is [`docs/DESIGN.md`](docs/DESIGN.md). Engineering conventions in [`STANDARDS.md`](STANDARDS.md). That file doubles as the working guide for the agentic coding process used to build this repo, so it spells out rules a human reviewer would take as given.
 
 ## Call it
 
@@ -238,7 +238,7 @@ Two details that will otherwise cost you an hour each:
 | GPU | 48GB tier. This worker keeps everything resident in bf16 (~34GB: 23.8GB transformer + ~9.5GB T5-XXL) for the fastest warm latency; under *that* policy 48GB is the floor. Smaller cards run FLUX fine with CPU offload (~27GB peak, fits 40GB) or fp8 quantization (fits 24GB), trading seconds per job for VRAM |
 | Concurrency | `concurrency_modifier = 1`. The worker is GPU-bound; a second concurrent job causes VRAM contention, not throughput |
 
-Decisions and their trade-offs, including the options rejected, are in [`docs/DESIGN.md`](docs/DESIGN.md). Full reasoning, including what is deliberately *not* built and what production would cost, is in [`docs/specs/`](docs/specs/00-overview.md).
+Decisions and their trade-offs, including the options rejected and what is deliberately *not* built, are in [`docs/DESIGN.md`](docs/DESIGN.md). Operational procedure is in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ### Diagrams
 
@@ -268,10 +268,8 @@ samples/             committed generations with their seeds
 gateway/             spike: FastAPI tier beyond the brief (gateway/README.md)
 deploy/endpoints/    endpoint configuration as code
 scripts/             apply_endpoint.py
-docs/README.md       documentation index
 docs/RUNBOOK.md      build, deploy, rollback, diagnosis
-docs/DESIGN.md       decisions and trade-offs
-docs/specs/          design, 10 documents
+docs/DESIGN.md       the design record: decisions and trade-offs
 STANDARDS.md         engineering conventions; guide for the agentic workflow
 CONTRIBUTING.md      workflow, gates, review expectations
 SECURITY.md          reporting a vulnerability
@@ -285,7 +283,7 @@ SECURITY.md          reporting a vulnerability
 | Endpoint | **Live** since 2026-08-06; 7/7 e2e cases pass, three samples committed with seeds |
 | Image | `ghcr.io/andyozj/flux-worker:0.1.0-b8d1f76-slim`, 2.9GB, public, no secrets in any layer |
 | Worker | 97 unit tests (no GPU required) + 7 e2e against the live endpoint |
-| `BENCHMARKS.md` | Measured 2026-08-06; 156 records incl. an A100 cross-tier run, raw JSONL committed, methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md) |
+| `BENCHMARKS.md` | Measured 2026-08-06; 156 records incl. an A100 cross-tier run, raw JSONL committed, methodology in its own header |
 | Gateway | Spike, beyond the brief: core, async API, reconciler, 240 tests; containerised and in CI alongside the worker |
 
 ## Author

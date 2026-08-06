@@ -107,8 +107,8 @@ listed in [`.env.example`](../.env.example).
 
 ## Not implemented
 
-Persistence is in-memory. Postgres and Alembic are specified in [`docs/specs/02-gateway-core.md`](../docs/specs/02-gateway-core.md); `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. Jobs do not survive a restart, and terminal jobs are evicted after an hour: results carry multi-MB images, so unbounded retention is an OOM, and RunPod's own copy expires after 30 minutes anyway.
+Persistence is in-memory. Postgres and Alembic are specified but unimplemented; `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. Jobs do not survive a restart, and terminal jobs are evicted after an hour: results carry multi-MB images, so unbounded retention is an OOM, and RunPod's own copy expires after 30 minutes anyway.
 
 `GATEWAY_API_KEYS` has no built-in default; an unset or empty value fails the gateway at startup. `compose.yaml` supplies `demo:local-development-key` for local runs only; the application itself never invents a credential, so set your own before exposing the port.
 
-The full gap list, ranked, is in [`docs/specs/08-production-readiness.md`](../docs/specs/08-production-readiness.md). The two that matter most: no per-caller request-rate limit, and no budget cap. Authentication answers *who*; nothing yet answers *how much you're spending*.
+The ranked limits are in [`docs/DESIGN.md`](../docs/DESIGN.md#known-limits). The two that matter most: no per-caller request-rate limit, and no budget cap. Authentication answers *who*; nothing yet answers *how much you're spending*.
