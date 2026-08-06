@@ -10,7 +10,7 @@ Update on every deploy. **A rollback that begins with "work out which tag was go
 |---|---|---|---|---|
 | 2026-08-06 | `flux-worker-cached` (`<endpoint-id — supplied in the submission email>`) | `0.1.0-44c9643-slim` | — (first deploy) | Image digest `bfc09415c350`. Cached model + HF token set in console post-create |
 | 2026-08-06 | `flux-worker-cached` (`<endpoint-id — supplied in the submission email>`) | `0.1.0-72e537d-slim` | `0.1.0-44c9643-slim` | Error envelopes JSON-encoded; GPU list narrowed to L40S only. 7/7 e2e green post-roll |
-| 2026-08-06 | `flux-worker-cached` (`<endpoint-id — supplied in the submission email>`) | `0.1.0-b8d1f76-slim` | `0.1.0-72e537d-slim` | First deploy through `deploy.yml` (CI gates → GHCR → environment approval → apply). Ships revision discovery: `model_version` reports the staged snapshot's SHA; the pin is gone. e2e verification pending |
+| 2026-08-06 | `flux-worker-cached` (`<endpoint-id — supplied in the submission email>`) | `0.1.0-b8d1f76-slim` | `0.1.0-72e537d-slim` | First deploy through `deploy.yml` (CI gates → GHCR → environment approval → apply). Ships revision discovery: `model_version` reports the staged snapshot's SHA; the pin is gone. 7/7 e2e green post-roll (143s incl. cold start) |
 
 ## Prerequisites
 

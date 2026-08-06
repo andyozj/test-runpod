@@ -2,7 +2,7 @@
 
 A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod using cached models — the platform pre-stages the weights on host machines. The baked-weights image is a one-command build target (`make build-baked`), not deployed — see [Weight delivery](#weight-delivery).
 
-> **Status:** live and verified 2026-08-06 — endpoint `<endpoint-id — supplied in the submission email>`, image `0.1.0-72e537d-slim`, 48GB GPU tier, weights via RunPod's model store. 7/7 e2e cases pass against it; committed samples with seeds in [`samples/`](samples/); measured results in [`BENCHMARKS.md`](BENCHMARKS.md) (156 records, raw data committed).
+> **Status:** live and verified 2026-08-06 — endpoint `<endpoint-id — supplied in the submission email>`, image `0.1.0-b8d1f76-slim` (deployed via `deploy.yml`), 48GB GPU tier, weights via RunPod's model store. 7/7 e2e cases pass against it; committed samples with seeds in [`samples/`](samples/); measured results in [`BENCHMARKS.md`](BENCHMARKS.md) (156 records, raw data committed).
 
 ## What's here
 
@@ -246,7 +246,7 @@ STANDARDS.md         engineering conventions; guide for the agentic workflow
 | | |
 |---|---|
 | Endpoint | **Live** since 2026-08-06 — 7/7 e2e cases pass, three samples committed with seeds |
-| Image | `ghcr.io/andyozj/flux-worker:0.1.0-72e537d-slim`, 2.9GB, public, no secrets in any layer |
+| Image | `ghcr.io/andyozj/flux-worker:0.1.0-b8d1f76-slim`, 2.9GB, public, no secrets in any layer |
 | Worker | 70 unit tests (no GPU required) + 7 e2e against the live endpoint |
 | `BENCHMARKS.md` | Measured 2026-08-06 — 156 records incl. an A100 cross-tier run, raw JSONL committed, methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md) |
 | Gateway | Beyond-brief tier: core, async API, reconciler, 86 tests; containerised and in CI alongside the worker |
