@@ -1,4 +1,4 @@
-"""Benchmark harness for the deployed endpoint. Methodology: docs/specs/09-benchmarks.md.
+"""Benchmark harness for the deployed endpoint: fixed seed, one variable at a time.
 
 Raw records append to a JSONL file keyed by (section, config, index), so a run
 that dies partway resumes without repeating completed work, and re-running
@@ -696,7 +696,7 @@ def render(cfg: dict[str, Any], tag: str) -> str:
         f"image `{tag}`, GPU {cfg['gpu']}, model per response `model_version`. "
         f"Rate ${rate}/hr ({cfg['rate_date']}, re-verify before quoting). "
         f"Raw data: `benchmarks/raw.jsonl` ({len(records)} records). "
-        "Methodology: `docs/specs/09-benchmarks.md`; fixed seed, one variable at a time.",
+        "Methodology: fixed seed, one variable at a time, N stated per cell.",
         "",
         "**Read the N column before any percentile.** N is 3-10 per cell: sequential probes, "
         "no sustained load. Enough to rank options (step count, GPU tier, image format); "
