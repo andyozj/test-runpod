@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+
+# `gateway.main` builds its module-level `app` at import time, which now
+# requires a credential (settings.py fails closed with no default). Set
+# before any `gateway.*` import so collecting `test_composition_root.py`
+# doesn't blow up for lack of one.
+os.environ.setdefault("GATEWAY_API_KEYS", "demo:local-development-key")
 
 from gateway.adapters.memory import InMemoryJobRepository
 from gateway.core.models import ErrorCode, JobResult, JobStatus, Progress

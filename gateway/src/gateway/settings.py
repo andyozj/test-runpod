@@ -7,7 +7,7 @@ from functools import lru_cache
 from hashlib import sha256
 
 import structlog
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = structlog.get_logger()
@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     Attributes:
         runpod_api_key: Credential for the serverless endpoint.
         runpod_endpoint_id: The endpoint to call.
-        gateway_api_keys: Caller credentials as `key_id:secret` pairs.
+        gateway_api_keys: Caller credentials as `key_id:secret` pairs. Required;
+            there is no built-in credential, so an unset or empty value fails
+            startup rather than admitting an undocumented default caller.
         reconcile_interval_s: Tick interval while work is outstanding.
         reconcile_idle_interval_s: Tick interval when nothing is unresolved.
         reconcile_batch: Jobs claimed per tick.
@@ -34,6 +36,9 @@ class Settings(BaseSettings):
             below that cannot reopen the double-submit window.
         health_max_age_s: Age beyond which a queue reading is treated as
             unknown, so a dead reconciler cannot shed traffic forever.
+        max_active_jobs_per_key: Non-terminal job cap per caller. Bounds how
+            much of the (billable) queue one compromised or runaway key can
+            occupy.
         version: Reported by the health endpoints.
     """
 
@@ -41,7 +46,7 @@ class Settings(BaseSettings):
 
     runpod_api_key: str = ""
     runpod_endpoint_id: str = ""
-    gateway_api_keys: str = "demo:local-development-key"
+    gateway_api_keys: str
     reconcile_interval_s: float = 2.0
     reconcile_idle_interval_s: float = 10.0
     reconcile_batch: int = 50
@@ -50,7 +55,29 @@ class Settings(BaseSettings):
     avg_job_s: float = 22.0
     submit_grace_s: float = 30.0
     health_max_age_s: float = 30.0
+    max_active_jobs_per_key: int = 10
     version: str = Field(default="0.1.0")
+
+    @field_validator("gateway_api_keys")
+    @classmethod
+    def _require_a_credential(cls, value: str) -> str:
+        """Reject a blank value so the app fails at startup, not on first request.
+
+        Args:
+            value: The raw `GATEWAY_API_KEYS` value.
+
+        Returns:
+            The value, unchanged.
+
+        Raises:
+            ValueError: The value is empty or whitespace-only.
+        """
+        if not value.strip():
+            raise ValueError(
+                "GATEWAY_API_KEYS must be set to at least one `key_id:secret` "
+                "pair. There is no default credential."
+            )
+        return value
 
     def key_digests(self) -> dict[str, bytes]:
         """Return caller key digests, recomputed per call.
@@ -65,9 +92,13 @@ class Settings(BaseSettings):
             Digest mapped to the `api_key_id` it identifies.
         """
         digests: dict[str, bytes] = {}
-        for pair in self.gateway_api_keys.split(","):
+        for index, pair in enumerate(self.gateway_api_keys.split(",")):
             if ":" not in pair:
-                logger.warning("malformed_api_key_pair", pair=pair.strip()[:8])
+                logger.warning(
+                    "malformed_api_key_pair",
+                    index=index,
+                    reason="missing ':' separator",
+                )
                 continue
             key_id, _, secret = pair.strip().partition(":")
             digests[key_id] = sha256(secret.encode()).digest()
