@@ -23,4 +23,5 @@ services:
       JOB_DEADLINE_S: ${JOB_DEADLINE_S:-600}
       MAX_QUEUE_WAIT_S: ${MAX_QUEUE_WAIT_S:-120}
       AVG_JOB_S: ${AVG_JOB_S:-22}
+      MAX_ACTIVE_JOBS_PER_KEY: ${MAX_ACTIVE_JOBS_PER_KEY:-10}
     restart: unless-stopped

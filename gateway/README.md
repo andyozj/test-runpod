@@ -20,7 +20,7 @@ Clients could call RunPod directly. What that costs:
 From the repo root — `compose.yaml` and `.env.example` live there:
 
 ```bash
-cp .env.example .env      # RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID
+cp .env.example .env      # RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID, GATEWAY_API_KEYS
 docker compose up
 
 curl -X POST localhost:8000/v1/jobs \
@@ -66,4 +66,8 @@ Everything is testable with no database and no endpoint, because every dependenc
 
 Persistence is in-memory. Postgres and Alembic are specified in [`docs/specs/02-gateway-core.md`](../docs/specs/02-gateway-core.md); `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. Jobs do not survive a restart, and terminal jobs are evicted after an hour — results carry multi-MB images, so unbounded retention is an OOM, and RunPod's own copy expires after 30 minutes anyway.
 
-The full gap list, ranked, is in [`docs/specs/08-production-readiness.md`](../docs/specs/08-production-readiness.md). The two that matter most: no per-caller rate limit, and no budget cap. Authentication answers *who*; nothing answers *how much*. The default `GATEWAY_API_KEYS` is a documented dev credential — the composition root logs a warning when it is in use; set your own before exposing the port.
+`GATEWAY_API_KEYS` has no built-in default — an unset or empty value fails the gateway at startup. `compose.yaml` supplies `demo:local-development-key` for local runs only; the application itself never invents a credential, so set your own before exposing the port.
+
+Each API key is capped at `MAX_ACTIVE_JOBS_PER_KEY` (default 10) non-terminal jobs at once; submitting past the cap gets a `429` with `Retry-After`. That bounds one key's share of the queue — it is not a request-rate limit and not a spend cap.
+
+The full gap list, ranked, is in [`docs/specs/08-production-readiness.md`](../docs/specs/08-production-readiness.md). The two that matter most: no per-caller request-rate limit, and no budget cap. Authentication answers *who*; nothing yet answers *how much you're spending*.
