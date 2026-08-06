@@ -1,0 +1,17 @@
+{
+  "prompt": "a red fox in falling snow, cinematic lighting",
+  "seed": 42,
+  "n": 10,
+  "gpu": "NVIDIA L40S",
+  "rate_usd_hr": 1.75,
+  "rate_date": "2026-08-05",
+  "steps_sweep": [4, 10, 20, 28, 40, 50],
+  "resolution_sweep": [512, 768, 1024, 1280, 1536],
+  "payload_formats": ["png", "jpeg"],
+  "payload_resolution": 1536,
+  "payload_n": 3,
+  "concurrency_burst": 6,
+  "cold_cycles": 3,
+  "idle_timeout_s": 60,
+  "workers_max": 3
+}
