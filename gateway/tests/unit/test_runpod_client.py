@@ -283,6 +283,160 @@ async def test_a_probe_escaping_without_a_verdict_frees_the_permit(
     assert (await client.status("up-1")).status is JobStatus.QUEUED
 
 
+# --- The breaker as `_request` actually drives it ---
+
+
+def with_breaker(
+    script: list[httpx.Response | Exception], breaker: CircuitBreaker
+) -> tuple[HttpRunPodClient, list[httpx.Request]]:
+    calls: list[httpx.Request] = []
+    return (
+        HttpRunPodClient(
+            endpoint_id="ep",
+            api_key="k",
+            client=scripted_client(script, calls),
+            max_attempts=3,
+            breaker=breaker,
+        ),
+        calls,
+    )
+
+
+async def test_exhausted_retries_raise_and_open_the_breaker() -> None:
+    """The unit tests drive the breaker directly; this proves `_request` does."""
+    breaker = CircuitBreaker(threshold=3, cooldown_s=30.0)
+    client, calls = with_breaker([httpx.ConnectError("refused")] * 3, breaker)
+
+    with pytest.raises(UpstreamUnavailableError):
+        await client.status("up-1")
+
+    assert len(calls) == 3
+    assert not breaker.allow(now=asyncio.get_running_loop().time())
+
+
+async def test_an_open_breaker_fast_fails_without_touching_the_transport() -> None:
+    """Spending a full retry cycle on a host known to be down is the whole cost."""
+    breaker = CircuitBreaker(threshold=1, cooldown_s=3600.0)
+    client, calls = with_breaker([httpx.Response(200, json={"id": "up-1"})], breaker)
+    breaker.record_failure(now=asyncio.get_running_loop().time())
+
+    with pytest.raises(UpstreamUnavailableError, match="circuit breaker open"):
+        await client.status("up-1")
+
+    assert calls == []
+
+
+async def test_a_success_after_the_cooldown_closes_the_breaker_again() -> None:
+    breaker = CircuitBreaker(threshold=1, cooldown_s=0.0)
+    client, calls = with_breaker(
+        [httpx.Response(200, json={"status": "IN_QUEUE"})], breaker
+    )
+    breaker.record_failure(now=asyncio.get_running_loop().time())
+
+    assert (await client.status("up-1")).status is JobStatus.QUEUED
+    assert len(calls) == 1
+    assert breaker.allow(now=asyncio.get_running_loop().time())
+
+
+# --- Real-transport URL paths and partial output ---
+
+
+async def test_cancel_posts_to_the_cancel_path() -> None:
+    client, calls = make([httpx.Response(200, json={"status": "CANCELLED"})])
+
+    await client.cancel("up-7")
+
+    assert calls[0].method == "POST"
+    assert calls[0].url.path == "/v2/ep/cancel/up-7"
+
+
+async def test_status_gets_the_status_path() -> None:
+    client, calls = make([httpx.Response(200, json={"status": "IN_QUEUE"})])
+
+    await client.status("up-7")
+
+    assert calls[0].method == "GET"
+    assert calls[0].url.path == "/v2/ep/status/up-7"
+
+
+async def test_submit_posts_the_input_envelope_to_the_run_path() -> None:
+    client, calls = make([httpx.Response(200, json={"id": "up-1"})])
+
+    await client.submit({"prompt": "x"})
+
+    assert calls[0].url.path == "/v2/ep/run"
+    assert json.loads(calls[0].content) == {"input": {"prompt": "x"}}
+
+
+async def test_health_gets_the_health_path() -> None:
+    client, calls = make([httpx.Response(200, json={})])
+
+    await client.health()
+
+    assert calls[0].url.path == "/v2/ep/health"
+
+
+async def test_in_progress_partial_output_is_parsed_as_progress() -> None:
+    """The only signal a caller gets while the GPU is still working."""
+    output = {"step": 7, "total": 28, "percent": 25}
+    client, _ = make(
+        [httpx.Response(200, json={"status": "IN_PROGRESS", "output": output})]
+    )
+
+    result = await client.status("up-1")
+
+    assert result.status is JobStatus.IN_PROGRESS
+    assert result.progress is not None
+    assert (result.progress.step, result.progress.total, result.progress.percent) == (
+        7,
+        28,
+        25,
+    )
+    assert result.result is None
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        None,
+        {},
+        {"step": 7},
+        ["not", "a", "dict"],
+        "a string",
+    ],
+    ids=["absent", "empty", "no-total", "list", "string"],
+)
+async def test_in_progress_without_a_usable_total_reports_no_progress(
+    output: Any,
+) -> None:
+    """`total` is what makes a percentage meaningful; without it, report nothing."""
+    body: dict[str, Any] = {"status": "IN_PROGRESS"}
+    if output is not None:
+        body["output"] = output
+    client, _ = make([httpx.Response(200, json=body)])
+
+    result = await client.status("up-1")
+
+    assert result.status is JobStatus.IN_PROGRESS
+    assert result.progress is None
+
+
+async def test_a_queued_job_reports_no_progress() -> None:
+    client, _ = make([httpx.Response(200, json={"status": "IN_QUEUE"})])
+
+    result = await client.status("up-1")
+
+    assert result.status is JobStatus.QUEUED
+    assert result.progress is None
+
+
+async def test_an_unknown_upstream_status_raises_rather_than_guessing() -> None:
+    client, _ = make([httpx.Response(200, json={"status": "SOMETHING_NEW"})])
+
+    with pytest.raises(ValueError, match="unknown RunPod status"):
+        await client.status("up-1")
+
+
 def test_the_submit_envelope_counts_every_attempt_and_every_sleep() -> None:
     assert submit_envelope_s(1, 30.0) == 30.0
     assert submit_envelope_s(3, 30.0) == pytest.approx(3 * 30.0 + 0.2 + 0.4)

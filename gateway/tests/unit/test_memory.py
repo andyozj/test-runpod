@@ -145,6 +145,129 @@ async def test_the_upstream_id_is_recorded_even_on_a_cancelled_job(
     assert attached.status is JobStatus.CANCELLED
 
 
+async def test_claims_are_oldest_first(clock: FrozenClock) -> None:
+    """Newest-first starves the oldest job forever once the backlog exceeds the limit."""
+    repository = InMemoryJobRepository(clock=clock)
+    order = []
+    for index in range(3):
+        job = await repository.create(make_job())
+        order.append((await repository.attach_runpod_id(job.id, f"up-{index}")).id)
+        clock.advance(10)
+
+    claimed = await claim(repository)
+
+    assert [job.id for job in claimed] == order
+
+
+async def test_the_limit_caps_a_claim_at_the_oldest_n(clock: FrozenClock) -> None:
+    repository = InMemoryJobRepository(clock=clock)
+    order = []
+    for index in range(5):
+        job = await repository.create(make_job())
+        order.append((await repository.attach_runpod_id(job.id, f"up-{index}")).id)
+        clock.advance(10)
+
+    claimed = await claim(repository, limit=2)
+
+    assert [job.id for job in claimed] == order[:2]
+
+
+async def test_the_unclaimed_remainder_is_taken_by_the_next_call(
+    clock: FrozenClock,
+) -> None:
+    """The leases from the first claim must not hide the backlog from the second."""
+    repository = InMemoryJobRepository(clock=clock)
+    order = []
+    for index in range(4):
+        job = await repository.create(make_job())
+        order.append((await repository.attach_runpod_id(job.id, f"up-{index}")).id)
+        clock.advance(10)
+
+    first = await claim(repository, limit=2)
+    second = await claim(repository, limit=2)
+
+    assert [job.id for job in first] == order[:2]
+    assert [job.id for job in second] == order[2:]
+
+
+async def test_a_limit_of_zero_claims_nothing(clock: FrozenClock) -> None:
+    repository = InMemoryJobRepository(clock=clock)
+    await submitted_job(repository)
+
+    assert await claim(repository, limit=0) == []
+
+
+# --- Idempotency-key eviction ---
+
+
+def keyed_job(key: str, prompt: str = "a fox") -> Job:
+    params = GenerationParams(prompt=prompt)
+    return Job(
+        id=uuid.uuid4(),
+        status=JobStatus.QUEUED,
+        params=params,
+        context=RequestContext(
+            api_key_id="demo", correlation_id="c-1", idempotency_key=key
+        ),
+        created_at=FROZEN,
+        updated_at=FROZEN,
+        request_hash=params.fingerprint(),
+    )
+
+
+async def test_an_evicted_jobs_idempotency_key_is_forgotten(
+    clock: FrozenClock,
+) -> None:
+    """A key still pointing at a dropped job resolves to nothing that exists."""
+    repository = InMemoryJobRepository(clock=clock, retention_s=3600)
+    old = await repository.create(keyed_job("k-1"))
+    await repository.mark_failed(
+        old.id, ErrorCode.JOB_CANCELLED, "cancelled", JobStatus.CANCELLED
+    )
+
+    clock.advance(3601)
+    replacement = await repository.create(keyed_job("k-1"))
+
+    assert replacement.id != old.id
+    assert await repository.get(replacement.id) is not None
+
+
+async def test_a_live_jobs_idempotency_key_survives_an_eviction_sweep(
+    clock: FrozenClock,
+) -> None:
+    """The sweep must drop only the keys of the jobs it actually removed."""
+    repository = InMemoryJobRepository(clock=clock, retention_s=3600)
+    doomed = await repository.create(keyed_job("k-doomed"))
+    await repository.mark_failed(
+        doomed.id, ErrorCode.JOB_CANCELLED, "cancelled", JobStatus.CANCELLED
+    )
+    live = await repository.create(keyed_job("k-live"))
+
+    clock.advance(3601)
+    replayed = await repository.create(keyed_job("k-live"))
+
+    assert replayed.id == live.id
+    assert await repository.get(doomed.id) is None
+
+
+async def test_an_evicted_key_no_longer_reports_a_body_conflict(
+    clock: FrozenClock,
+) -> None:
+    """Conflicting with a job nobody can fetch is a 409 the caller cannot act on."""
+    repository = InMemoryJobRepository(clock=clock, retention_s=3600)
+    old = await repository.create(keyed_job("k-1", prompt="a fox"))
+    await repository.mark_failed(
+        old.id, ErrorCode.JOB_CANCELLED, "cancelled", JobStatus.CANCELLED
+    )
+
+    clock.advance(3601)
+    fresh = await repository.create(
+        keyed_job("k-1", prompt="a completely different cat")
+    )
+
+    assert fresh.id != old.id
+
+
 async def test_count_active_counts_only_the_key_and_non_terminal_jobs(
     clock: FrozenClock,
 ) -> None:
