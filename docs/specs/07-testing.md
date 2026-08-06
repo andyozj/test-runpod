@@ -10,7 +10,7 @@ Local containers are permitted; testcontainers Postgres is expected. The prohibi
 
 The GPU half is architectural. It is why `pipeline.py` exposes a lazy accessor rather than a module-level global, and why `inference.generate()` takes a pipeline parameter instead of reaching for one. A handler that cannot be imported on a laptop cannot be tested, and the fix for that is design, not tooling.
 
-It is also what makes Phases 1, 3, and 4 possible while credits are pending.
+It is also what makes Phases 1, 3, and 4 runnable on a laptop, before any endpoint exists.
 
 ## Fakes, not mocks
 

@@ -20,7 +20,8 @@ Clients could call RunPod directly. What that costs:
 From the repo root (`compose.yaml` and `.env.example` live there):
 
 ```bash
-cp .env.example .env      # RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID, GATEWAY_API_KEYS
+cp .env.example .env      # RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required;
+                          # compose refuses to start without either
 docker compose up
 
 curl -X POST localhost:8000/v1/jobs \
@@ -36,38 +37,78 @@ curl -s localhost:8000/v1/jobs/<job_id> -H "Authorization: Bearer local-developm
   | jq -r '.result.image_base64' | base64 -d > fox.png
 ```
 
-Interactive docs at `localhost:8000/docs`.
+`GATEWAY_API_KEYS` is unset in `.env.example`, so compose falls back to
+`demo:local-development-key` — the secret in the curls above. Set your own
+before exposing the port; the application itself never invents a credential.
 
 ## Endpoints
 
-| Route | Auth | Purpose |
-|---|---|---|
-| `POST /v1/jobs` | yes | Submit. `202` with a job id, or `200` replaying an idempotent duplicate |
-| `GET /v1/jobs/{id}` | yes | Status, live progress, result or error. Scoped to the caller's own jobs |
-| `POST /v1/jobs/{id}/cancel` | yes | Stop a queued or running job, upstream included. Scoped likewise |
-| `GET /health` | **no** | Liveness. Probes cannot hold credentials |
-| `GET /health/detailed` | yes | Upstream queue counts plus reconciler liveness |
+Every route the app serves. Interactive docs, unauthenticated, at
+`localhost:8000/docs` (Swagger UI) and `localhost:8000/redoc`; the OpenAPI
+document is at `/openapi.json`.
 
-Headers: `Idempotency-Key` for safe retries, `X-Correlation-ID` to supply your own trace id.
+| Route | Method | Auth | Purpose |
+|---|---|---|---|
+| `/v1/jobs` | POST | yes | Submit. `202` with a job id, or `200` replaying an idempotent duplicate |
+| `/v1/jobs/{id}` | GET | yes | Status, live progress, result or error. Scoped to the caller's own jobs |
+| `/v1/jobs/{id}/cancel` | POST | yes | Stop a queued or running job, upstream included. Scoped likewise |
+| `/health` | GET | **no** | Liveness: status and version, no I/O. Probes cannot hold credentials |
+| `/health/detailed` | GET | yes | Upstream queue counts plus reconciler liveness. Authenticated because it reports topology |
+
+Another caller's job id answers `404`, not `403`: confirming the id exists is
+itself a leak.
+
+Request headers: `Authorization: Bearer <key>`, `Idempotency-Key` for safe
+retries, `X-Correlation-ID` to supply your own trace id.
+
+Response headers: `X-Correlation-ID` on every response, `Idempotency-Replayed:
+true` on a replay, `Retry-After` on `429` and `503`. Starlette lowercases
+response headers on the wire — compare case-insensitively.
+
+Every error, including FastAPI's own validation failures, comes back in one
+envelope: `{"error": {"code", "message", "suggestion", "correlation_id"}}`.
+Codes come from [`contracts/error-codes.json`](../contracts/error-codes.json).
 
 ## Structure
 
 ```
-core/       the rules. Imports nothing outward, enforced by import-linter
-adapters/   memory repository, RunPod HTTP client, blocklist
-api/        FastAPI routes, auth, wire schemas
-workers/    the reconciler
-main.py     composition root: the only module naming both a protocol and an implementation
+src/gateway/
+  core/           the rules: models, protocols, JobService. Imports nothing
+                  outward, enforced by import-linter
+  adapters/       memory.py (job repository), runpod_client.py (HTTP client,
+                  retry, circuit breaker), guardrails.py (blocklist)
+  api/            app.py (routes, auth, health), schemas.py (wire types)
+  workers/        reconciler.py: polls upstream, resolves outstanding jobs
+  contracts.py    locate the repo-root contracts/ directory
+  settings.py     the only module that reads the environment
+  main.py         composition root: the only module naming both a protocol and
+                  an implementation
 ```
 
-Everything is testable with no database and no endpoint, because every dependency is a protocol with a hand-written fake. That is why this exists at all while credits are pending.
+Everything is testable with no database and no endpoint, because every dependency is a protocol with a hand-written fake. The whole spike is therefore exercisable against fakes, with no live endpoint and no credentials.
+
+## Load shedding
+
+Two paths return `429 QUEUE_SATURATED`, both with `Retry-After`:
+
+- estimated queue wait above `MAX_QUEUE_WAIT_S` (default 120s), derived from
+  the upstream queue reading and `AVG_JOB_S`. `Retry-After` is that estimate
+  jittered 0.8-1.2× and floored at 1s, so a shed burst does not retry in
+  lockstep
+- that key already holding `MAX_ACTIVE_JOBS_PER_KEY` (default 10) non-terminal
+  jobs. `Retry-After` is `AVG_JOB_S + 1`
+
+The per-key cap bounds one caller's share of the queue. It is not a
+request-rate limit and not a spend cap.
+
+`503 UPSTREAM_UNAVAILABLE` with `Retry-After: 5` means the circuit breaker is
+open or RunPod is unreachable. Every environment variable and its default is
+listed in [`.env.example`](../.env.example).
 
 ## Not implemented
 
 Persistence is in-memory. Postgres and Alembic are specified in [`docs/specs/02-gateway-core.md`](../docs/specs/02-gateway-core.md); `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. Jobs do not survive a restart, and terminal jobs are evicted after an hour: results carry multi-MB images, so unbounded retention is an OOM, and RunPod's own copy expires after 30 minutes anyway.
 
 `GATEWAY_API_KEYS` has no built-in default; an unset or empty value fails the gateway at startup. `compose.yaml` supplies `demo:local-development-key` for local runs only; the application itself never invents a credential, so set your own before exposing the port.
-
-Each API key is capped at `MAX_ACTIVE_JOBS_PER_KEY` (default 10) non-terminal jobs at once; submitting past the cap gets a `429` with `Retry-After`. That bounds one key's share of the queue; it is not a request-rate limit and not a spend cap.
 
 The full gap list, ranked, is in [`docs/specs/08-production-readiness.md`](../docs/specs/08-production-readiness.md). The two that matter most: no per-caller request-rate limit, and no budget cap. Authentication answers *who*; nothing yet answers *how much you're spending*.
