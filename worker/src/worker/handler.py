@@ -5,6 +5,7 @@ Holds no inference logic, which is what keeps it testable without a GPU.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 from typing import Any
 
@@ -164,7 +165,9 @@ def _guard_image(image_base64: str | None) -> None:
     """
     if image_base64 is None:
         return
-    verdict = _image_guardrail.check(image_base64.encode("ascii"))
+    # The hook receives the decoded image bytes, as the protocol promises —
+    # a real classifier bound here must not be handed base64 text.
+    verdict = _image_guardrail.check(base64.b64decode(image_base64))
     if verdict.blocked:
         raise GuardrailBlockedError(
             ErrorCode.IMAGE_BLOCKED,
