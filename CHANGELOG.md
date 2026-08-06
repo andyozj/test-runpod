@@ -63,7 +63,7 @@ First live deployment. Endpoint created from image `0.1.0-44c9643-slim`.
 
 ### Changed
 
-- Weight delivery moved from a network volume to RunPod cached models; the volume was tried, measured against the alternative, and removed entirely rather than kept as an unpopulated fallback.
+- Weight delivery moved from a network volume to RunPod cached models; the volume was tried and dropped on a list-price cost analysis — datacenter pin, per-GB storage bill, one-time population step — never populated or deployed, and not kept as a fallback.
 - Redundant API surface deleted in favour of RunPod's own operations.
 
 ### Fixed

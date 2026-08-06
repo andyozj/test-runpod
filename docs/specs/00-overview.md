@@ -73,7 +73,7 @@ Staging pulls the *whole* repository, so the ~24GB of duplicate single-file weig
 
 ### The network volume was considered and dropped
 
-An earlier revision deployed from a network volume. It was removed once cached models worked: a volume's cost is a datacenter pin that narrows the GPU pool exactly when scaling up under load (the moment it was supposed to help), plus a per-GB monthly bill and a population step.
+An earlier revision plumbed a network volume, never populated and never deployed. It was removed once cached models worked: a volume's cost is a datacenter pin that narrows the GPU pool exactly when scaling up under load (the moment it was supposed to help), plus a per-GB monthly bill and a population step.
 
 **A volume remains a valid option and no code carries it.** `weights.resolve()` already honours an explicit `WEIGHTS_PATH`, the same branch the baked image uses, so mounting a volume at that path would work without a line of change. What was removed is the config, the population procedure, and the volume plumbing in the deploy script: machinery for a mechanism nothing deploys.
 

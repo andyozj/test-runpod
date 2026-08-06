@@ -40,7 +40,7 @@ What this runbook does not cover, so nobody looks for it at 3am:
 
 ## Build and push
 
-**Build locally.** The image is ~2.9GB: no weights, and no CUDA base image because the torch wheel carries its own libraries. No Pod in this procedure: an earlier revision baked a 45GB image and needed one; that stopped being true.
+**Build locally.** The image is ~2.9GB: no weights, and no CUDA base image because the torch wheel carries its own libraries. No Pod in this procedure: the baked variant would need one for its 45GB, the slim build does not.
 
 **Versioning:** the most recent `v*` git tag names the version; the commit SHA makes the image tag immutable. `make build-slim` derives both: `v0.1.0` at `abc1234` builds `0.1.0-abc1234-slim`. Bump by tagging: `git tag -a v0.2.0 -m "..." && git push --tags`.
 

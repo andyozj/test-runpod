@@ -221,7 +221,7 @@ A deliberate deviation, stated rather than hidden. Staging pulls the whole repo,
 
 `weights.resolve()` tries the configured path, then the model cache, so a deployment picks a mechanism by configuration alone. The staged snapshot is identified through the cache's `refs/main`, and the revision it actually holds is reported on every result; the worker refuses to start only when several snapshots coexist with no ref naming the staged one. RunPod's own example picks an arbitrary snapshot in that case, which would misattribute every image.
 
-The deployed (cached) variant is what [`BENCHMARKS.md`](BENCHMARKS.md) measures; the baked variant is built but not deployed, so it carries no numbers.
+The deployed (cached) variant is what [`BENCHMARKS.md`](BENCHMARKS.md) measures; the baked variant is a one-command build target, never built or deployed here, so it carries no numbers.
 
 Two details that will otherwise cost you an hour each:
 
@@ -286,7 +286,7 @@ SECURITY.md          reporting a vulnerability
 | Image | `ghcr.io/andyozj/flux-worker:0.1.0-b8d1f76-slim`, 2.9GB, public, no secrets in any layer |
 | Worker | 97 unit tests (no GPU required) + 7 e2e against the live endpoint |
 | `BENCHMARKS.md` | Measured 2026-08-06; 156 records incl. an A100 cross-tier run, raw JSONL committed, methodology in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md) |
-| Gateway | Spike, beyond the brief: core, async API, reconciler, 234 tests; containerised and in CI alongside the worker |
+| Gateway | Spike, beyond the brief: core, async API, reconciler, 240 tests; containerised and in CI alongside the worker |
 
 ## Author
 

@@ -85,7 +85,7 @@ src/gateway/
                   an implementation
 ```
 
-Everything is testable with no database and no endpoint, because every dependency is a protocol with a hand-written fake. That is why this exists at all while credits are pending.
+Everything is testable with no database and no endpoint, because every dependency is a protocol with a hand-written fake. The whole spike is therefore exercisable against fakes, with no live endpoint and no credentials.
 
 ## Load shedding
 
