@@ -153,7 +153,7 @@ class JobService:
             updated_at=now,
             request_hash=params.fingerprint(),
             error_code=ErrorCode.PROMPT_BLOCKED if verdict.blocked else None,
-            error_message=getattr(verdict, "reason", None) if verdict.blocked else None,
+            error_message=verdict.reason if verdict.blocked else None,
             completed_at=now if verdict.blocked else None,
         )
         stored = await self.repository.create(job)

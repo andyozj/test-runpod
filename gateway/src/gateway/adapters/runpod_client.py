@@ -255,6 +255,9 @@ class HttpRunPodClient:
     async def _request(
         self, method: str, path: str, *, idempotent: bool = True, **kwargs: Any
     ) -> dict[str, Any]:
+        # Any: `**kwargs` is forwarded verbatim to `httpx.AsyncClient.request`,
+        # whose own signature is the authority on what is accepted. The return
+        # is a decoded JSON object, narrowed to `dict` by `_body`.
         loop = asyncio.get_running_loop()
         if not self.breaker.allow(loop.time()):
             raise UpstreamUnavailableError("circuit breaker open")
@@ -417,6 +420,14 @@ def _decode_error(raw: Any) -> dict[str, Any]:
     The worker JSON-encodes its envelope because the platform drops dict
     errors. Anything undecodable becomes a message-only envelope rather than
     an exception — a malformed error must never mask the failure it reports.
+
+    Args:
+        raw: The upstream `error` field. `Any` because the upstream sends a
+            dict, a JSON string, or plain text, and deciding which is this
+            function's whole job.
+
+    Returns:
+        An envelope dict, always carrying at least `message`.
     """
     if isinstance(raw, dict):
         return raw
@@ -455,6 +466,8 @@ def _error_status(error: dict[str, Any], status: JobStatus) -> RunPodJobStatus:
 
 
 def _progress(output: Any) -> Progress | None:
+    # Any: the raw `output` field, whatever the upstream sent. Narrowing it is
+    # what the isinstance check below does.
     if not isinstance(output, dict) or "total" not in output:
         return None
     return Progress(

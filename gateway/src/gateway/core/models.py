@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -162,8 +163,6 @@ class GenerationParams:
             >>> a.fingerprint() == GenerationParams(prompt="cat").fingerprint()
             False
         """
-        import hashlib
-
         canonical = json.dumps(self.__dict__, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -231,7 +230,9 @@ class Job:
         mutating one another caller still holds.
 
         Args:
-            **changes: Fields to replace.
+            **changes: Fields to replace. `Any` because this forwards to
+                `dataclasses.replace`, whose per-field types are the authority
+                and are checked there.
 
         Returns:
             The updated job.

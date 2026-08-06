@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from gateway.core.models import (
@@ -283,6 +283,4 @@ class SystemClock:
         Returns:
             An aware UTC datetime.
         """
-        from datetime import UTC
-
         return datetime.now(UTC)

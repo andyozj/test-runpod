@@ -252,18 +252,39 @@ class RunPodClient(Protocol):
         ...
 
 
+class GuardrailVerdict(Protocol):
+    """What `core/` needs from a guardrail's answer, and nothing more.
+
+    Structural rather than a shared class: the adapter owns the concrete
+    verdict, including whatever else it carries (categories, a score), and
+    `core/` must not grow a dependency on that shape to read two fields.
+
+    Read-only members, so a frozen dataclass satisfies it.
+    """
+
+    @property
+    def blocked(self) -> bool:
+        """Whether the request must not proceed."""
+        ...
+
+    @property
+    def reason(self) -> str | None:
+        """Human-readable explanation, safe to log and to return."""
+        ...
+
+
 @runtime_checkable
 class PromptGuardrail(Protocol):
     """A content check applied before any GPU time is spent."""
 
-    def check(self, prompt: str) -> Any:
+    def check(self, prompt: str) -> GuardrailVerdict:
         """Classify a prompt.
 
         Args:
             prompt: The raw text.
 
         Returns:
-            A verdict exposing `blocked`, `categories` and `reason`.
+            The verdict for this prompt.
         """
         ...
 
@@ -285,6 +306,7 @@ __all__ = [
     "Clock",
     "EndpointHealth",
     "GenerationParams",
+    "GuardrailVerdict",
     "IdempotencyConflictError",
     "JobRepository",
     "PromptGuardrail",

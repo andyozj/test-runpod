@@ -6,7 +6,27 @@ import pytest
 import structlog.testing
 from pydantic import ValidationError
 
+from gateway.core.service import JobService
 from gateway.settings import Settings
+
+# Every setting the service also defaults. An unconfigured gateway and a
+# bare `JobService()` must agree, or "the default" means two different things
+# depending on which one you read.
+SERVICE_DEFAULTED = [
+    "job_deadline_s",
+    "max_queue_wait_s",
+    "avg_job_s",
+    "submit_grace_s",
+    "health_max_age_s",
+    "max_active_jobs_per_key",
+]
+
+
+@pytest.mark.parametrize("name", SERVICE_DEFAULTED)
+def test_settings_default_to_the_service_constants(name: str) -> None:
+    settings = Settings(gateway_api_keys="demo:secret")
+
+    assert getattr(settings, name) == JobService.__dataclass_fields__[name].default
 
 
 def test_missing_gateway_api_keys_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

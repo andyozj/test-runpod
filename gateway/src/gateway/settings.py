@@ -10,6 +10,19 @@ import structlog
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The service owns these numbers; this module only says which of them the
+# environment may override. Repeating the literals here is how the two drift
+# into disagreeing about what "the default" is. The import direction is the
+# only one the layering allows: `core/` never imports settings.
+from gateway.core.service import (
+    DEFAULT_AVG_JOB_S,
+    DEFAULT_HEALTH_MAX_AGE_S,
+    DEFAULT_JOB_DEADLINE_S,
+    DEFAULT_MAX_ACTIVE_JOBS_PER_KEY,
+    DEFAULT_MAX_QUEUE_WAIT_S,
+    DEFAULT_SUBMIT_GRACE_S,
+)
+
 logger = structlog.get_logger()
 
 
@@ -50,12 +63,12 @@ class Settings(BaseSettings):
     reconcile_interval_s: float = 2.0
     reconcile_idle_interval_s: float = 10.0
     reconcile_batch: int = 50
-    job_deadline_s: int = 600
-    max_queue_wait_s: float = 120.0
-    avg_job_s: float = 22.0
-    submit_grace_s: float = 30.0
-    health_max_age_s: float = 30.0
-    max_active_jobs_per_key: int = 10
+    job_deadline_s: int = DEFAULT_JOB_DEADLINE_S
+    max_queue_wait_s: float = DEFAULT_MAX_QUEUE_WAIT_S
+    avg_job_s: float = DEFAULT_AVG_JOB_S
+    submit_grace_s: float = DEFAULT_SUBMIT_GRACE_S
+    health_max_age_s: float = DEFAULT_HEALTH_MAX_AGE_S
+    max_active_jobs_per_key: int = DEFAULT_MAX_ACTIVE_JOBS_PER_KEY
     version: str = Field(default="0.1.0")
 
     @field_validator("gateway_api_keys")

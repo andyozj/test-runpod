@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Request, Response
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from gateway.api.schemas import (
@@ -31,10 +32,6 @@ from gateway.core.service import (
 from gateway.settings import Settings
 
 logger = structlog.get_logger()
-
-HTTP_OK = 200
-HTTP_ACCEPTED = 202
-HTTP_BAD_REQUEST = 400
 
 # A reconciler tick normally lands every 2-10s; three idle intervals of
 # silence means the loop is dead, not slow.
@@ -58,10 +55,10 @@ class Deps:
 
 
 def _error(
-    status: int, code: ErrorCode, message: str, suggestion: str | None = None
+    status_code: int, code: ErrorCode, message: str, suggestion: str | None = None
 ) -> HTTPException:
     return HTTPException(
-        status_code=status,
+        status_code=status_code,
         detail=ErrorBody(
             code=code.value, message=message, suggestion=suggestion
         ).model_dump(),
@@ -84,7 +81,7 @@ def _shed(message: str, retry_after_s: int, correlation_id: str) -> HTTPExceptio
         The exception to raise.
     """
     return HTTPException(
-        status_code=429,
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail=ErrorBody(
             code=ErrorCode.QUEUE_SATURATED.value,
             message=message,
@@ -110,7 +107,7 @@ def authenticate(settings: Settings, authorization: str | None) -> str:
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise _error(
-            401,
+            status.HTTP_401_UNAUTHORIZED,
             ErrorCode.UNAUTHENTICATED,
             "Missing or malformed Authorization header.",
             "Send `Authorization: Bearer <api-key>`.",
@@ -118,7 +115,9 @@ def authenticate(settings: Settings, authorization: str | None) -> str:
     key_id = settings.resolve_key(authorization.removeprefix("Bearer "))
     if key_id is None:
         logger.warning("auth_failed")
-        raise _error(401, ErrorCode.UNAUTHENTICATED, "Invalid API key.")
+        raise _error(
+            status.HTTP_401_UNAUTHORIZED, ErrorCode.UNAUTHENTICATED, "Invalid API key."
+        )
     return key_id
 
 
@@ -146,7 +145,7 @@ async def _submit(
         return await service.submit(params, ctx)
     except UpstreamUnavailableError as exc:
         raise HTTPException(
-            status_code=503,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=ErrorBody(
                 code=ErrorCode.UPSTREAM_UNAVAILABLE.value,
                 message="The endpoint is unreachable.",
@@ -167,7 +166,7 @@ async def _submit(
         ) from exc
     except IdempotencyConflictError as exc:
         raise _error(
-            409,
+            status.HTTP_409_CONFLICT,
             ErrorCode.IDEMPOTENCY_CONFLICT,
             "Idempotency-Key was reused with a different request body.",
             "Use a new key, or resend the original body.",
@@ -188,7 +187,7 @@ def build_router(deps: Deps) -> APIRouter:
     def _authenticate(authorization: str | None) -> str:
         return authenticate(deps.settings, authorization)
 
-    @router.post("/jobs", status_code=HTTP_ACCEPTED, response_model=None)
+    @router.post("/jobs", status_code=status.HTTP_202_ACCEPTED, response_model=None)
     async def create_job(
         body: GenerationRequest,
         response: Response,
@@ -221,7 +220,7 @@ def build_router(deps: Deps) -> APIRouter:
         if submission.replayed:
             # The repository is the only thing that knows: a client retrying
             # with its own original correlation id is still a replay.
-            response.status_code = HTTP_OK
+            response.status_code = status.HTTP_200_OK
             response.headers["Idempotency-Replayed"] = "true"
             return JobView.of(job)
         return JobCreated(
@@ -246,7 +245,11 @@ def build_router(deps: Deps) -> APIRouter:
         # Another caller's job answers 404, not 403: confirming the id exists
         # is itself a leak.
         if job is None or job.context.api_key_id != key_id:
-            raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
+            raise _error(
+                status.HTTP_404_NOT_FOUND,
+                ErrorCode.JOB_NOT_FOUND,
+                f"No job with id {job_id}.",
+            )
         return JobView.of(job)
 
     @router.post("/jobs/{job_id}/cancel")
@@ -269,16 +272,27 @@ def build_router(deps: Deps) -> APIRouter:
         key_id = _authenticate(authorization)
         existing = await deps.service.get(job_id)
         if existing is None or existing.context.api_key_id != key_id:
-            raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
+            raise _error(
+                status.HTTP_404_NOT_FOUND,
+                ErrorCode.JOB_NOT_FOUND,
+                f"No job with id {job_id}.",
+            )
         job = await deps.service.cancel(job_id)
         if job is None:
-            raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
+            raise _error(
+                status.HTTP_404_NOT_FOUND,
+                ErrorCode.JOB_NOT_FOUND,
+                f"No job with id {job_id}.",
+            )
         return JobView.of(job)
 
     return router
 
 
-def create_app(deps: Deps, on_startup: Any = None) -> FastAPI:
+def create_app(
+    deps: Deps,
+    on_startup: Callable[[], AbstractAsyncContextManager[None]] | None = None,
+) -> FastAPI:
     """Assemble the application.
 
     Args:
@@ -315,7 +329,9 @@ def create_app(deps: Deps, on_startup: Any = None) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def http_error(_: Request, exc: HTTPException) -> JSONResponse:
-        detail: Any = exc.detail
+        # Starlette types `detail` as Any; `object` is enough to narrow it and
+        # keeps the Any out of the module.
+        detail: object = exc.detail
         body = (
             ErrorBody(**detail)
             if isinstance(detail, dict)
@@ -327,14 +343,14 @@ def create_app(deps: Deps, on_startup: Any = None) -> FastAPI:
             headers=exc.headers,
         )
 
-    @app.exception_handler(_validation_error_type())
-    async def validation_error(_: Request, exc: Any) -> JSONResponse:
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         # FastAPI's default 422 is remapped so every error a caller sees has
         # the same envelope.
         first = exc.errors()[0]
         field = ".".join(str(part) for part in first["loc"][1:]) or "body"
         return JSONResponse(
-            status_code=HTTP_BAD_REQUEST,
+            status_code=status.HTTP_400_BAD_REQUEST,
             content=ErrorResponse(
                 error=ErrorBody(
                     code=_code_for(field).value,
@@ -367,7 +383,11 @@ def create_app(deps: Deps, on_startup: Any = None) -> FastAPI:
             authorization: Bearer credential.
 
         Returns:
-            Per-dependency status.
+            Per-dependency status. `Any`: a heterogeneous JSON document —
+            strings at the top level, nested per-check objects of
+            str/int/float/None. Naming that union buys no checking, since
+            FastAPI serialises from the annotation and the shape is asserted
+            by the tests.
         """
         authenticate(deps.settings, authorization)
         upstream = deps.service.endpoint_health
@@ -398,12 +418,6 @@ def create_app(deps: Deps, on_startup: Any = None) -> FastAPI:
 
     app.include_router(build_router(deps))
     return app
-
-
-def _validation_error_type() -> type[Exception]:
-    from fastapi.exceptions import RequestValidationError
-
-    return RequestValidationError
 
 
 def _code_for(field: str) -> ErrorCode:
