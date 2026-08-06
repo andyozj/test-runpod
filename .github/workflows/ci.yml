@@ -14,9 +14,9 @@ jobs:
       matrix:
         package: [worker, gateway]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
         with:
           enable-cache: true
 
@@ -58,21 +58,27 @@ jobs:
         run: |
           uv run pytest --doctest-modules -q \
             src/gateway/core/models.py src/gateway/core/protocols.py \
+            src/gateway/core/service.py \
             src/gateway/adapters/runpod_client.py src/gateway/adapters/guardrails.py
 
   tools:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
         with:
           enable-cache: true
 
       - name: Lint CLI tools
+        run: make lint-tools
+
+      - name: Type-check CLI tools
         run: |
-          uvx ruff@0.7.4 format --check client scripts benchmarks
-          uvx ruff@0.7.4 check client scripts benchmarks
+          uvx --with mypy --with types-PyYAML mypy scripts client benchmarks --ignore-missing-imports
+
+      - name: Tests (scripts)
+        run: uv run --no-project --with pytest --with pyyaml pytest -q scripts/tests
 
 # The worker image is deliberately NOT built here: the slim (~2.9GB) build is
 # a local one-liner (`make build-slim`) and the baked variant (~45GB) exceeds
