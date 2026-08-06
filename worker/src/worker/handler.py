@@ -12,7 +12,7 @@ from typing import Any
 import structlog
 from pydantic import ValidationError
 
-from worker.errors import ErrorCode, GuardrailBlockedError, WorkerError
+from worker.errors import ErrorCode, GuardrailBlockedError, InferenceError, WorkerError
 from worker.guardrails import (
     BlocklistPromptGuardrail,
     ImageGuardrail,
@@ -136,24 +136,28 @@ def _first_message(exc: ValidationError) -> str:
 def _guard_prompt(request: GenerationRequest) -> None:
     """Reject a prompt before any GPU time is spent.
 
-    A guardrail that raises is treated as a block, not a crash: a broken
-    classifier must fail closed, not let every prompt through unchecked.
+    A guardrail that raises still stops the prompt reaching the GPU (fail
+    closed), but is reported as `INFERENCE_FAILED`, not a block: the prompt
+    did not violate policy, the classifier crashed. `*_BLOCKED` codes are the
+    gateway's terminal content-policy state and are retryable only after the
+    prompt changes; a crash is an infra fault and is retryable as-is, so
+    conflating the two would misreport a guardrail outage as a policy spike.
 
     Args:
         request: The validated request.
 
     Raises:
-        GuardrailBlockedError: The prompt was blocked, or the guardrail itself
-            failed.
+        GuardrailBlockedError: The prompt was blocked.
+        InferenceError: The guardrail itself failed.
     """
     try:
         verdict = _prompt_guardrail.check(request.prompt)
     except WorkerError:
         raise
     except Exception as exc:
-        raise GuardrailBlockedError(
-            ErrorCode.PROMPT_BLOCKED,
-            "Prompt guardrail failed; request blocked to fail closed.",
+        raise InferenceError(
+            ErrorCode.INFERENCE_FAILED,
+            "Prompt guardrail failed.",
             "Retry; if it persists, contact support.",
         ) from exc
     if verdict.blocked:
@@ -169,15 +173,16 @@ def _guard_image(image_base64: str | None) -> None:
 
     Runs before any upload: storing first and deleting after is a race the
     blocker loses, and the object may already have been referenced. A
-    guardrail that raises is treated as a block, not a crash, for the same
-    fail-closed reason as `_guard_prompt`.
+    guardrail that raises still stops the image being returned (fail
+    closed), but is reported as `INFERENCE_FAILED`, not a block — see
+    `_guard_prompt` for why the two codes must not be conflated.
 
     Args:
         image_base64: The encoded image, if one was produced.
 
     Raises:
-        GuardrailBlockedError: The image was blocked, or the guardrail itself
-            failed.
+        GuardrailBlockedError: The image was blocked.
+        InferenceError: The guardrail itself failed.
     """
     if image_base64 is None:
         return
@@ -188,9 +193,9 @@ def _guard_image(image_base64: str | None) -> None:
     except WorkerError:
         raise
     except Exception as exc:
-        raise GuardrailBlockedError(
-            ErrorCode.IMAGE_BLOCKED,
-            "Image guardrail failed; result blocked to fail closed.",
+        raise InferenceError(
+            ErrorCode.INFERENCE_FAILED,
+            "Image guardrail failed.",
             "Retry; if it persists, contact support.",
         ) from exc
     if verdict.blocked:

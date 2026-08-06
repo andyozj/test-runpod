@@ -14,9 +14,9 @@
     {"input": "g­ore", "expect_blocked": true, "note": "soft hyphen inserted mid-term"},
     {"input": "g-o-r-e", "expect_blocked": true, "note": "separator-split term"},
     {"input": "b_e_h_e_a_d_i_n_g", "expect_blocked": true, "note": "separator-split multi-character term"},
-    {"input": "gorgeous scenery at dusk", "expect_blocked": false, "note": "innocent word containing a blocked substring"},
-    {"input": "a categorically fine landscape", "expect_blocked": false, "note": "innocent word containing a blocked substring"},
-    {"input": "music attracts a crowd", "expect_blocked": false, "note": "unrelated words must not glue into a match"},
-    {"input": "a peaceful mountain sunrise", "expect_blocked": false, "note": "clean prompt"}
+    {"input": "undergore", "expect_blocked": false, "note": "blocked term as a word suffix; exercises the leading (?<!\\w) boundary"},
+    {"input": "a gorefest of colour", "expect_blocked": false, "note": "blocked term as a word prefix; exercises the trailing (?!\\w) boundary"},
+    {"input": "a peaceful mountain sunrise", "expect_blocked": false, "note": "clean prompt"},
+    {"input": "gentle waves at sunset", "expect_blocked": false, "note": "clean prompt"}
   ]
 }

@@ -177,7 +177,7 @@ def test_image_guardrail_receives_the_generated_bytes(
     assert len(recorder.seen) == 1
 
 
-def test_a_crashing_prompt_guardrail_blocks_rather_than_raising(
+def test_a_crashing_prompt_guardrail_fails_closed_as_inference_failed(
     pipeline: FakePipeline, settings: Settings
 ) -> None:
     handler_module.set_guardrails(
@@ -186,11 +186,14 @@ def test_a_crashing_prompt_guardrail_blocks_rather_than_raising(
 
     output = _run({"prompt": "x"}, pipeline, settings)
 
-    assert _envelope(output)["code"] == "PROMPT_BLOCKED"  # type: ignore[index]
+    # The guardrail crashed, the prompt didn't violate policy: INFERENCE_FAILED,
+    # not PROMPT_BLOCKED, so the gateway doesn't log a guardrail outage as a
+    # content-policy block.
+    assert _envelope(output)["code"] == "INFERENCE_FAILED"  # type: ignore[index]
     assert pipeline.calls == []
 
 
-def test_a_crashing_image_guardrail_blocks_rather_than_raising(
+def test_a_crashing_image_guardrail_fails_closed_as_inference_failed(
     pipeline: FakePipeline, settings: Settings
 ) -> None:
     handler_module.set_guardrails(
@@ -199,7 +202,7 @@ def test_a_crashing_image_guardrail_blocks_rather_than_raising(
 
     output = _run({"prompt": "x"}, pipeline, settings)
 
-    assert _envelope(output)["code"] == "IMAGE_BLOCKED"  # type: ignore[index]
+    assert _envelope(output)["code"] == "INFERENCE_FAILED"  # type: ignore[index]
     assert "image_base64" not in output
 
 
