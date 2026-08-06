@@ -120,6 +120,31 @@ Expect a job id, progress ticking to 100%, then a PNG with its seed and timings.
 
 Commit the image with its prompt and seed. A result nobody can reproduce is a screenshot, not evidence.
 
+### Gateway compose stack
+
+```bash
+docker compose up -d        # needs RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID in .env
+```
+
+First live run verified 2026-08-06 (the only prior container start was the
+crash-loop that `55662a8` fixed). 15/15 surface checks against `localhost:8000`
+with the dev key:
+
+- `/health` 200; `/health/detailed` reports `runpod` and `reconciler` both ok
+- missing or wrong key → 401 `UNAUTHENTICATED`
+- blocklist term → 202 job recorded `BLOCKED`/`PROMPT_BLOCKED`, nothing sent upstream
+- same `Idempotency-Key` + same body → 200, `Idempotency-Replayed: true`, same job id;
+  different body → 409 `IDEMPOTENCY_CONFLICT`; unknown job id → 404
+- real 512×512 4-step job through the live endpoint → `COMPLETED` PNG,
+  1.4s inference, staged model revision reported
+
+The `Idempotency-Replayed` header arrives lowercase on the wire (Starlette
+lowercases all response headers) — compare case-insensitively.
+
+The in-memory store means jobs do not survive a container restart, and the
+reconciler polls with the endpoint's real API key: `docker compose down` when
+done rather than leaving the stack up.
+
 ## Rollback
 
 ```bash
