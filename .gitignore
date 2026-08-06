@@ -24,3 +24,4 @@ uv.lock.bak
 docs/notes/
 docs/specs/
 docs/superpowers/
+.playwright-mcp/
