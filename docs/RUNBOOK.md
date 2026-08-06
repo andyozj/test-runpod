@@ -8,7 +8,7 @@ Update on every deploy. **A rollback that begins with "work out which tag was go
 
 | Date | Endpoint | Tag | Previous (rollback target) | Notes |
 |---|---|---|---|---|
-| — | — | — | — | Not yet deployed |
+| 2026-08-06 | `flux-worker-cached` (`7jrg4nu4b47fsv`) | `0.1.0-44c9643-slim` | — (first deploy) | Image digest `bfc09415c350`. Cached model + HF token set in console post-create |
 
 ## Prerequisites
 

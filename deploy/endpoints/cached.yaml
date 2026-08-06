@@ -14,7 +14,7 @@
 # the endpoint runs wherever there is capacity.
 
 name: flux-worker-cached
-image_repository: ghcr.io/OWNER/flux-worker
+image_repository: ghcr.io/andyozj/flux-worker
 
 gpu_types:
   - NVIDIA L40S
