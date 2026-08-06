@@ -245,11 +245,12 @@ async def test_queue_saturation_is_429_with_the_estimated_wait(
 
     response = client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH)
 
-    # (100 queued / 1 worker) * 22.0s avg = 2200s, +1 so the caller waits past it.
+    # (100 queued / 1 worker) * 22.0s avg = 2200s, jittered +/-20%.
     assert response.status_code == 429
-    assert response.headers["Retry-After"] == "2201"
+    retry_after = int(response.headers["Retry-After"])
+    assert 1760 <= retry_after <= 2640
     assert response.json()["error"]["code"] == "QUEUE_SATURATED"
-    assert response.json()["error"]["suggestion"] == "Retry after 2201s."
+    assert response.json()["error"]["suggestion"] == f"Retry after {retry_after}s."
     assert response.json()["error"]["correlation_id"]
 
 

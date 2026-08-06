@@ -189,6 +189,19 @@ class InMemoryJobRepository:
             completed_at=self.clock.now(),
         )
 
+    async def release_idempotency_key(self, job_id: UUID) -> None:
+        """Drop this job's key binding, leaving the job row itself in place.
+
+        Args:
+            job_id: The job whose key binding is dropped.
+        """
+        async with self._lock:
+            self._by_key = {
+                scoped: bound
+                for scoped, bound in self._by_key.items()
+                if bound != job_id
+            }
+
     async def claim_unresolved(
         self, limit: int, lease_s: float, submit_grace_s: float
     ) -> list[Job]:

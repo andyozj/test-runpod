@@ -51,6 +51,44 @@ async def test_live_jobs_survive_retention(clock: FrozenClock) -> None:
     assert await repository.get(live.id) is not None
 
 
+async def test_releasing_an_idempotency_key_frees_it_for_a_new_job(
+    clock: FrozenClock,
+) -> None:
+    repository = InMemoryJobRepository(clock=clock)
+    first = make_job()
+    first = first.advanced(
+        context=RequestContext(
+            api_key_id="demo", correlation_id="c-1", idempotency_key="k1"
+        )
+    )
+    await repository.create(first)
+
+    await repository.release_idempotency_key(first.id)
+    second = make_job()
+    second = second.advanced(context=first.context)
+    stored = await repository.create(second)
+
+    assert stored.id == second.id
+
+
+async def test_releasing_a_key_leaves_other_keys_alone(clock: FrozenClock) -> None:
+    repository = InMemoryJobRepository(clock=clock)
+    kept = make_job()
+    kept = kept.advanced(
+        context=RequestContext(
+            api_key_id="demo", correlation_id="c-1", idempotency_key="k1"
+        )
+    )
+    await repository.create(kept)
+
+    await repository.release_idempotency_key(uuid.uuid4())
+    replay = make_job()
+    replay = replay.advanced(context=kept.context)
+    stored = await repository.create(replay)
+
+    assert stored.id == kept.id
+
+
 LEASE_S = 60.0
 GRACE_S = 30.0
 

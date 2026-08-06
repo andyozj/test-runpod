@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import random
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,6 +39,25 @@ DEFAULT_MAX_ACTIVE_JOBS_PER_KEY = 10
 # One lease must outlast the slowest tick. It only bounds recovery from a
 # reconciler that died mid-tick; a live one releases each claim as it goes.
 DEFAULT_CLAIM_LEASE_S = 60.0
+
+RETRY_AFTER_JITTER = (0.8, 1.2)
+
+
+def _retry_after_s(wait_s: float) -> int:
+    """Turn an estimated wait into a jittered `Retry-After`, floored at 1s.
+
+    The spread is not decoration: an exact wait returns every shed caller at
+    the same instant, converting one queue spike into a synchronised second
+    one (docs/specs/02-gateway-core.md).
+
+    Args:
+        wait_s: The estimated wait in seconds.
+
+    Returns:
+        Seconds to tell the caller to wait, at least one.
+    """
+    jittered = wait_s * random.uniform(*RETRY_AFTER_JITTER)  # noqa: S311 - backoff spread, not a secret
+    return max(1, math.ceil(jittered))
 
 
 @dataclass(frozen=True)
@@ -452,7 +473,7 @@ class JobService:
             return
         wait = (self._health.in_queue / self._health.capacity) * self.avg_job_s
         if wait > self.max_queue_wait_s:
-            raise QueueSaturatedError(retry_after_s=int(wait) + 1)
+            raise QueueSaturatedError(retry_after_s=_retry_after_s(wait))
 
     async def _shed_if_over_capacity(self, job: Job) -> None:
         """Reject a freshly inserted, not-yet-submitted job under load.
@@ -462,6 +483,12 @@ class JobService:
         marked FAILED rather than left QUEUED with no upstream id — otherwise
         `reconcile` would later treat it as an orphaned submit and dispatch it
         anyway, which is exactly the cost shedding exists to avoid.
+
+        The idempotency key is released with it. The 429 tells the caller to
+        retry, and a key left bound to this FAILED row would replay that
+        failure for the whole retention window — the retry could never become
+        a real attempt. Nothing was submitted upstream, so there is no
+        duplicate work to protect against.
 
         Args:
             job: The job just inserted, still QUEUED.
@@ -477,6 +504,7 @@ class JobService:
             await self.repository.mark_failed(
                 job.id, ErrorCode.QUEUE_SATURATED, str(exc), JobStatus.FAILED
             )
+            await self.repository.release_idempotency_key(job.id)
             raise
 
     async def _check_active_job_cap(self, api_key_id: str) -> None:

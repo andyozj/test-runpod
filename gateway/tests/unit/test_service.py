@@ -237,6 +237,83 @@ async def test_queue_pressure_sheds_when_the_wait_is_too_long(
     assert exc.value.retry_after_s > 0
 
 
+async def test_retry_after_is_jittered_around_the_estimated_wait(
+    service: JobService, runpod: FakeRunPodClient
+) -> None:
+    """Synchronised return converts one queue spike into a second one."""
+    runpod.health_value = EndpointHealth(
+        in_queue=100, in_progress=0, workers_running=0, workers_idle=1
+    )
+    await service.reconcile()
+
+    # (100 queued / 1 worker) * 22.0s avg = 2200s, spread +/-20%.
+    seen = set()
+    for _ in range(50):
+        with pytest.raises(QueueSaturatedError) as exc:
+            await service.submit(PARAMS, ctx())
+        assert 1760 <= exc.value.retry_after_s <= 2640
+        seen.add(exc.value.retry_after_s)
+
+    assert len(seen) > 1, "a deterministic value is not jitter"
+
+
+async def test_a_shed_job_releases_its_idempotency_key(
+    service: JobService, runpod: FakeRunPodClient
+) -> None:
+    """The 429 tells the caller to retry; a burnt key can never be retried."""
+    runpod.health_value = EndpointHealth(
+        in_queue=100, in_progress=0, workers_running=0, workers_idle=1
+    )
+    await service.reconcile()
+    with pytest.raises(QueueSaturatedError):
+        await service.submit(PARAMS, ctx(key="shed-1"))
+
+    runpod.health_value = EndpointHealth(
+        in_queue=0, in_progress=0, workers_running=0, workers_idle=1
+    )
+    await service.reconcile()
+    retry = await service.submit(PARAMS, ctx(key="shed-1"))
+
+    assert not retry.replayed
+    assert retry.job.status is JobStatus.QUEUED
+    assert len(runpod.submissions) == 1
+
+
+async def test_a_genuinely_failed_job_still_replays_by_key(
+    service: JobService, runpod: FakeRunPodClient
+) -> None:
+    """Only shedding releases the key; a real failure stays replayable."""
+    first = await service.submit(PARAMS, ctx(key="k-failed"))
+    runpod.next_status = failed()
+    await service.reconcile()
+
+    replay = await service.submit(PARAMS, ctx(key="k-failed"))
+
+    assert replay.replayed
+    assert replay.job.id == first.job.id
+    assert replay.job.status is JobStatus.FAILED
+    assert len(runpod.submissions) == 1
+
+
+async def test_a_capped_job_releases_its_idempotency_key(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    service = _capped_service(repository, runpod, guardrail, clock, cap=1)
+    await service.submit(PARAMS, ctx())
+    with pytest.raises(ActiveJobLimitError):
+        await service.submit(PARAMS, ctx(key="capped-1"))
+
+    runpod.next_status = completed()
+    await service.reconcile()
+    retry = await service.submit(PARAMS, ctx(key="capped-1"))
+
+    assert not retry.replayed
+    assert retry.job.status is JobStatus.QUEUED
+
+
 async def test_queue_pressure_fails_open_when_health_is_unavailable(
     service: JobService, runpod: FakeRunPodClient
 ) -> None:

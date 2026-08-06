@@ -165,6 +165,20 @@ class JobRepository(Protocol):
         """
         ...
 
+    async def release_idempotency_key(self, job_id: UUID) -> None:
+        """Unbind a job's idempotency key so the same key can be used again.
+
+        Only for a job the gateway itself refused before doing any work. A key
+        stays bound for the whole retention window otherwise — that binding is
+        what makes a replay return the original job instead of billing a
+        second GPU run.
+
+        Args:
+            job_id: The job whose key binding is dropped. A job with no key,
+                or an unknown id, is a no-op.
+        """
+        ...
+
     async def claim_unresolved(
         self, limit: int, lease_s: float, submit_grace_s: float
     ) -> list[Job]:
