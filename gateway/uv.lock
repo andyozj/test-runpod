@@ -148,6 +148,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "annotated-types" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pytest" },
@@ -168,6 +169,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "annotated-types", specifier = ">=0.7" },
     { name = "import-linter", specifier = ">=2.1" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pytest", specifier = ">=8.3" },

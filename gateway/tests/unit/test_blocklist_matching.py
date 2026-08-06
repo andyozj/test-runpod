@@ -1,9 +1,11 @@
-"""Both tiers must agree on the same blocklist.
+"""Matcher unit tests over synthetic terms.
 
-The worker implements the same matching over the same contract file. Package
-isolation forbids importing it, so this asserts the shared corpus produces the
-same verdicts here — the only thing preventing a silent divergence where the
-gateway blocks a prompt the worker allows, or the reverse.
+These do not prevent divergence from the worker and never did: the terms are
+invented here, so the worker never sees them. Cross-tier agreement is asserted
+by `test_guardrail_corpus.py` (the shared corpus, run by both tiers) and
+`test_normalisation_contract.py` (the shared normalisation tables). What is
+left here is what those cannot cover — the matcher's own behaviour on terms
+chosen to isolate one rule at a time.
 """
 
 from __future__ import annotations
@@ -67,7 +69,7 @@ def test_term_pattern_is_separator_tolerant() -> None:
     assert not term_pattern("cat").search("music attracts")
 
 
-def test_confusable_table_matches_the_worker() -> None:
+def test_a_confusable_is_applied_inside_a_term() -> None:
     """The `!`→`i` mapping is where the two tiers actually diverged once."""
     guardrail = BlocklistGuardrail(terms={"test": ("zzqindigoqz",)})
 

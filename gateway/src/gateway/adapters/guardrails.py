@@ -1,9 +1,10 @@
-"""Prompt blocklist, loaded from the shared contract.
+"""Prompt blocklist, loaded from the shared contracts.
 
-The worker implements the same matching over the same file. Package isolation
-forbids sharing the code, so a conformance test asserts both tiers reach the
-same verdict for the same input — without it they would silently diverge, and
-the gateway's block rate would stop describing what actually happens.
+Both the terms (`contracts/blocklist.json`) and the normalisation tables
+(`contracts/normalisation.json`) come from files the worker reads too. Package
+isolation forbids sharing the code, so `contracts/guardrail-corpus.json` is run
+by both tiers — without it they would silently diverge, and the gateway's block
+rate would stop describing what actually happens.
 """
 
 from __future__ import annotations
@@ -17,23 +18,36 @@ from pathlib import Path
 
 from gateway.contracts import contract_path
 
-_INVISIBLE = re.compile(r"[­​‌‍⁠﻿]")
-_SEPARATOR_CHARS = r"[\s\-_.*+~/\\|]"
-_SEPARATORS = re.compile(rf"{_SEPARATOR_CHARS}+")
-_SEPARATOR_RUN = rf"{_SEPARATOR_CHARS}*"
-_CONFUSABLES = str.maketrans(
-    {
-        "0": "o",
-        "1": "i",
-        "3": "e",
-        "4": "a",
-        "5": "s",
-        "7": "t",
-        "@": "a",
-        "$": "s",
-        "!": "i",
-    }
-)
+_NORMALISATION_CONTRACT = contract_path("normalisation.json")
+
+
+def _load_normalisation(
+    path: Path | None = None,
+) -> tuple[re.Pattern[str], re.Pattern[str], str, dict[int, str]]:
+    """Build the normalisation tables from the shared contract.
+
+    Args:
+        path: Override for the contract location. Tests only.
+
+    Returns:
+        A tuple of (invisible-char pattern, one-or-more-separators pattern,
+        the separator character class body used to build `term_pattern`'s
+        zero-or-more form, and the confusable translation table).
+    """
+    data = json.loads((path or _NORMALISATION_CONTRACT).read_text())
+    invisible = re.compile(
+        "[" + "".join(re.escape(ch) for ch in data["invisible_chars"]) + "]"
+    )
+    separator_body = "".join(re.escape(ch) for ch in data["separator_chars"])
+    if data["separator_includes_unicode_whitespace"]:
+        separator_body = r"\s" + separator_body
+    separators = re.compile(rf"[{separator_body}]+")
+    confusables = str.maketrans(data["confusables"])
+    return invisible, separators, separator_body, confusables
+
+
+_INVISIBLE, _SEPARATORS, _SEPARATOR_BODY, _CONFUSABLES = _load_normalisation()
+_SEPARATOR_RUN = rf"[{_SEPARATOR_BODY}]*"
 
 
 @dataclass(frozen=True)
