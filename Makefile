@@ -31,24 +31,24 @@ install: ## Sync both package environments
 	done
 
 .PHONY: check
-check: format-check lint types imports test ## Everything CI runs
+check: format-check lint types imports test doctest types-tools test-tools ## Everything CI runs
 
 .PHONY: format
-format: ## Apply formatting
+format: ## Apply formatting to both packages
 	@for p in $(PACKAGES); do \
 		[ -f $$p/pyproject.toml ] || continue; \
 		(cd $$p && uv run ruff format .) || exit 1; \
 	done
 
 .PHONY: format-check
-format-check:
+format-check: ## Check formatting without writing (both packages)
 	@for p in $(PACKAGES); do \
 		[ -f $$p/pyproject.toml ] || continue; \
 		echo "== format $$p"; (cd $$p && uv run ruff format --check .) || exit 1; \
 	done
 
 .PHONY: lint
-lint: lint-tools
+lint: lint-tools ## Lint both packages plus the CLI tools
 	@for p in $(PACKAGES); do \
 		[ -f $$p/pyproject.toml ] || continue; \
 		echo "== lint $$p"; (cd $$p && uv run ruff check .) || exit 1; \
@@ -61,11 +61,16 @@ lint-tools: ## Lint the CLI tools outside both packages
 	@uvx ruff@0.7.4 check client scripts benchmarks || exit 1
 
 .PHONY: types
-types:
+types: ## Run mypy on both packages
 	@for p in $(PACKAGES); do \
 		[ -f $$p/pyproject.toml ] || continue; \
 		echo "== mypy $$p"; (cd $$p && uv run mypy src/) || exit 1; \
 	done
+
+.PHONY: types-tools
+types-tools: ## Run mypy on the CLI tools outside both packages
+	@echo "== mypy client/ scripts/ benchmarks/"
+	@uvx --with types-PyYAML mypy scripts client benchmarks --ignore-missing-imports
 
 .PHONY: imports
 imports: ## Enforce the core/ layering contract
@@ -75,19 +80,24 @@ imports: ## Enforce the core/ layering contract
 	fi
 
 .PHONY: test
-test:
+test: ## Run pytest with coverage on both packages
 	@for p in $(PACKAGES); do \
 		[ -f $$p/pyproject.toml ] || continue; \
 		echo "== pytest $$p"; \
 		(cd $$p && uv run pytest -q --cov --cov-fail-under=80) || exit 1; \
 	done
 
+.PHONY: test-tools
+test-tools: ## Run the scripts/ unit tests (apply_endpoint.py pure functions)
+	@uv run --no-project --with pytest --with pyyaml pytest -q scripts/tests
+
 .PHONY: doctest
-doctest: ## Run the executable examples
+doctest: ## Run the executable examples (parity with the CI doctest gate)
 	cd worker && uv run pytest --doctest-modules \
 		src/worker/schemas.py src/worker/guardrails.py src/worker/errors.py -q
 	cd gateway && uv run pytest --doctest-modules \
 		src/gateway/core/models.py src/gateway/core/protocols.py \
+		src/gateway/core/service.py \
 		src/gateway/adapters/runpod_client.py src/gateway/adapters/guardrails.py -q
 
 .PHONY: weights-check
