@@ -26,6 +26,8 @@ logger = structlog.get_logger()
 
 BASE_URL = "https://api.runpod.ai/v2"
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+BACKOFF_BASE_S = 0.1
+MAX_BACKOFF_S = 2.0
 
 # RunPod vocabulary -> domain. An unknown value raises rather than defaulting:
 # silently mapping it to something plausible is how a job ends up in the wrong
@@ -85,6 +87,12 @@ class CircuitBreaker:
     _failures: int = 0
     _opened_at: float | None = None
     _probing: bool = False
+    _probe: int = 0
+
+    @property
+    def probe(self) -> int:
+        """Id of the most recently granted probe permit."""
+        return self._probe
 
     def allow(self, now: float) -> bool:
         """Take permission for a call, admitting one probe per cooldown.
@@ -105,7 +113,23 @@ class CircuitBreaker:
         if self._probing or now - self._opened_at < self.cooldown_s:
             return False
         self._probing = True
+        self._probe += 1
         return True
+
+    def release_probe(self, probe: int) -> None:
+        """Hand back a probe permit whose call resolved neither way.
+
+        The permit is exclusive, so an unreturned one is a breaker that never
+        admits another call again. Counters are untouched: nothing was learned
+        about the host.
+
+        Args:
+            probe: The id read at `allow` time. A caller holding an older id
+                took no permit, or its permit was already superseded, so it
+                must not free a probe that is still in flight.
+        """
+        if self._probing and probe == self._probe:
+            self._probing = False
 
     def record_success(self) -> None:
         """Reset after a successful call."""
@@ -235,47 +259,55 @@ class HttpRunPodClient:
         if not self.breaker.allow(loop.time()):
             raise UpstreamUnavailableError("circuit breaker open")
 
+        probe = self.breaker.probe
         url = f"{BASE_URL}/{self.endpoint_id}/{path}"
         headers = {"Authorization": f"Bearer {self.api_key}"}
         last: Exception | None = None
 
-        for attempt in range(1, self.max_attempts + 1):
-            try:
-                response = await self.client.request(
-                    method, url, headers=headers, **kwargs
-                )
-                if response.status_code in RETRYABLE_STATUS:
-                    msg = f"upstream {response.status_code}"
-                    raise UpstreamUnavailableError(msg)
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                # 4xx other than 429: the payload is rejected on every attempt,
-                # so retrying only wastes time. The breaker resets because a
-                # rejection proves the host is up and answering.
-                self.breaker.record_success()
-                raise UpstreamUnavailableError(str(exc)) from exc
-            except (httpx.HTTPError, UpstreamUnavailableError) as exc:
-                self.breaker.record_failure(loop.time())
-                # A transport error after the request was sent (read timeout,
-                # dropped connection) is ambiguous: the job may already exist
-                # upstream. Retrying a non-idempotent call there creates a
-                # duplicate GPU job, so only connect-phase failures and
-                # explicit retryable statuses are retried for those.
-                ambiguous = isinstance(exc, httpx.HTTPError) and not isinstance(
-                    exc, httpx.ConnectError | httpx.ConnectTimeout
-                )
-                if not idempotent and ambiguous:
+        try:
+            for attempt in range(1, self.max_attempts + 1):
+                try:
+                    response = await self.client.request(
+                        method, url, headers=headers, **kwargs
+                    )
+                    if response.status_code in RETRYABLE_STATUS:
+                        msg = f"upstream {response.status_code}"
+                        raise UpstreamUnavailableError(msg)
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    # 4xx other than 429: the payload is rejected on every
+                    # attempt, so retrying only wastes time. The breaker resets
+                    # because a rejection proves the host is up and answering.
+                    self.breaker.record_success()
                     raise UpstreamUnavailableError(str(exc)) from exc
-                last = exc
-                if attempt < self.max_attempts:
-                    await asyncio.sleep(_backoff(attempt))
-                    logger.info("upstream_retry", attempt=attempt, error=str(exc))
-                continue
-            else:
-                self.breaker.record_success()
-                return _body(response, path)
+                except (httpx.HTTPError, UpstreamUnavailableError) as exc:
+                    self.breaker.record_failure(loop.time())
+                    # A transport error after the request was sent (read
+                    # timeout, dropped connection) is ambiguous: the job may
+                    # already exist upstream. Retrying a non-idempotent call
+                    # there creates a duplicate GPU job, so only connect-phase
+                    # failures and explicit retryable statuses are retried.
+                    ambiguous = isinstance(exc, httpx.HTTPError) and not isinstance(
+                        exc, httpx.ConnectError | httpx.ConnectTimeout
+                    )
+                    if not idempotent and ambiguous:
+                        raise UpstreamUnavailableError(str(exc)) from exc
+                    last = exc
+                    if attempt < self.max_attempts:
+                        await asyncio.sleep(_backoff(attempt))
+                        logger.info("upstream_retry", attempt=attempt, error=str(exc))
+                    continue
+                else:
+                    self.breaker.record_success()
+                    return _body(response, path)
 
-        raise UpstreamUnavailableError(str(last))
+            raise UpstreamUnavailableError(str(last))
+        finally:
+            # Any escape that records neither outcome — a cancellation at
+            # shutdown, a client raising something that is not an HTTPError —
+            # would otherwise strand the half-open permit and wedge the breaker
+            # shut for the life of the process.
+            self.breaker.release_probe(probe)
 
 
 def _backoff(attempt: int) -> float:
@@ -287,7 +319,36 @@ def _backoff(attempt: int) -> float:
     Returns:
         Seconds to sleep.
     """
-    return random.uniform(0, min(2.0**attempt * 0.1, 2.0))  # noqa: S311
+    return random.uniform(0, _max_backoff(attempt))  # noqa: S311
+
+
+def _max_backoff(attempt: int) -> float:
+    return min(BACKOFF_BASE_S * 2.0**attempt, MAX_BACKOFF_S)
+
+
+def submit_envelope_s(max_attempts: int, timeout_s: float) -> float:
+    """Return the worst-case wall time one call may occupy, retries included.
+
+    A submit is not one request: connect-phase failures are retried even for
+    the non-idempotent path, each attempt can burn the full HTTP timeout, and
+    the sleeps between them count too. Anything deciding that a submit must be
+    finished by now has to reason about this number, not the timeout.
+
+    Args:
+        max_attempts: Total attempts per call, including the first.
+        timeout_s: Per-request HTTP timeout.
+
+    Returns:
+        Seconds.
+
+    Example:
+        >>> submit_envelope_s(3, 30.0)
+        90.6
+        >>> submit_envelope_s(1, 30.0)
+        30.0
+    """
+    backoff = sum(_max_backoff(attempt) for attempt in range(1, max_attempts))
+    return max_attempts * timeout_s + backoff
 
 
 def _body(response: httpx.Response, path: str) -> dict[str, Any]:

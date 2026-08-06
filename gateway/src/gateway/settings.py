@@ -28,9 +28,10 @@ class Settings(BaseSettings):
             normally would be cut off and their results discarded.
         max_queue_wait_s: Estimated wait above which submissions are shed.
         avg_job_s: Expected job duration; replaced by a measured p50.
-        submit_grace_s: How long a job with no upstream id is left alone before
-            the reconciler may adopt it. Must exceed the worst-case submit
-            round trip, or a job still being submitted is submitted twice.
+        submit_grace_s: Floor on how long a job with no upstream id is left
+            alone before the reconciler may adopt it. The composition root
+            raises it to the client's worst-case retry envelope, so a value
+            below that cannot reopen the double-submit window.
         health_max_age_s: Age beyond which a queue reading is treated as
             unknown, so a dead reconciler cannot shed traffic forever.
         version: Reported by the health endpoints.

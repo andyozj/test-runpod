@@ -54,6 +54,43 @@ def test_a_successful_probe_reopens_the_gate() -> None:
     assert breaker.allow(now=10.0)
 
 
+def test_an_unresolved_probe_permit_can_be_handed_back() -> None:
+    """A permit never returned is a breaker that never admits another call."""
+    breaker = CircuitBreaker(threshold=1, cooldown_s=10)
+    breaker.record_failure(now=0.0)
+    assert breaker.allow(now=10.0)
+    probe = breaker.probe
+
+    breaker.release_probe(probe)
+
+    assert breaker.allow(now=10.0)
+
+
+def test_a_stale_holder_cannot_free_a_live_probe() -> None:
+    """A call that started before the outage must not free somebody's probe."""
+    breaker = CircuitBreaker(threshold=1, cooldown_s=10)
+    stale = breaker.probe  # taken while the breaker was closed
+    breaker.record_failure(now=0.0)
+    assert breaker.allow(now=10.0)
+
+    breaker.release_probe(stale)
+
+    assert not breaker.allow(now=10.0)
+
+
+def test_releasing_a_probe_twice_admits_only_one_more() -> None:
+    breaker = CircuitBreaker(threshold=1, cooldown_s=10)
+    breaker.record_failure(now=0.0)
+    assert breaker.allow(now=10.0)
+    probe = breaker.probe
+
+    breaker.release_probe(probe)
+    breaker.release_probe(probe)
+
+    assert breaker.allow(now=10.0)
+    assert not breaker.allow(now=10.0)
+
+
 def test_failed_probe_rearms_the_cooldown() -> None:
     """A failure during half-open must re-open, not leave it closed forever."""
     breaker = CircuitBreaker(threshold=1, cooldown_s=10)

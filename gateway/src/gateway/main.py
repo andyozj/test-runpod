@@ -13,13 +13,35 @@ from fastapi import FastAPI
 
 from gateway.adapters.guardrails import BlocklistGuardrail
 from gateway.adapters.memory import InMemoryJobRepository, SystemClock
-from gateway.adapters.runpod_client import HttpRunPodClient
+from gateway.adapters.runpod_client import HttpRunPodClient, submit_envelope_s
 from gateway.api.app import Deps, create_app
 from gateway.core.service import JobService
 from gateway.settings import Settings, get_settings
 from gateway.workers.reconciler import Reconciler
 
 REQUEST_TIMEOUT_S = 30.0
+SUBMIT_MAX_ATTEMPTS = 3
+
+
+def submit_grace_s(settings: Settings) -> float:
+    """Return how long an id-less job is left to its submitter.
+
+    Derived from the client's own retry envelope rather than configured
+    independently. The reconciler adopting a job whose submit is still
+    retrying is exactly the double-submit the grace period exists to prevent,
+    and a configured value shorter than the envelope reopens it silently. The
+    setting is a floor, not the answer.
+
+    Args:
+        settings: Runtime configuration.
+
+    Returns:
+        Seconds, never below the worst case a submit can occupy.
+    """
+    return max(
+        settings.submit_grace_s,
+        submit_envelope_s(SUBMIT_MAX_ATTEMPTS, REQUEST_TIMEOUT_S),
+    )
 
 
 def configure_logging(level: str = "INFO") -> None:
@@ -68,13 +90,14 @@ def build(settings: Settings | None = None) -> FastAPI:
             endpoint_id=settings.runpod_endpoint_id,
             api_key=settings.runpod_api_key,
             client=http,
+            max_attempts=SUBMIT_MAX_ATTEMPTS,
         ),
         guardrail=BlocklistGuardrail.from_contract(),
         clock=clock,
         job_deadline_s=settings.job_deadline_s,
         max_queue_wait_s=settings.max_queue_wait_s,
         avg_job_s=settings.avg_job_s,
-        submit_grace_s=settings.submit_grace_s,
+        submit_grace_s=submit_grace_s(settings),
         health_max_age_s=settings.health_max_age_s,
     )
     reconciler = Reconciler(

@@ -7,13 +7,19 @@ one call at a time.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 import httpx
 import pytest
 
-from gateway.adapters.runpod_client import HttpRunPodClient, _decode_error
+from gateway.adapters.runpod_client import (
+    CircuitBreaker,
+    HttpRunPodClient,
+    _decode_error,
+    submit_envelope_s,
+)
 from gateway.core.models import ErrorCode, JobStatus
 from gateway.core.protocols import UpstreamUnavailableError
 
@@ -243,3 +249,41 @@ def test_decode_error_normalises_every_shape(
     raw: Any, expected: dict[str, Any]
 ) -> None:
     assert _decode_error(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "escape", [asyncio.CancelledError(), RuntimeError("client is closed")]
+)
+async def test_a_probe_escaping_without_a_verdict_frees_the_permit(
+    escape: BaseException,
+) -> None:
+    """A disconnect mid-probe once wedged the breaker shut for the process."""
+    scripted: list[BaseException | httpx.Response] = [
+        escape,
+        httpx.Response(200, json={"status": "IN_QUEUE"}),
+    ]
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        step = scripted.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+
+    client = HttpRunPodClient(
+        endpoint_id="ep",
+        api_key="k",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        breaker=CircuitBreaker(threshold=1, cooldown_s=0.0),
+    )
+    client.breaker.record_failure(now=0.0)
+
+    with pytest.raises(type(escape)):
+        await client.status("up-1")
+
+    assert (await client.status("up-1")).status is JobStatus.QUEUED
+
+
+def test_the_submit_envelope_counts_every_attempt_and_every_sleep() -> None:
+    assert submit_envelope_s(1, 30.0) == 30.0
+    assert submit_envelope_s(3, 30.0) == pytest.approx(3 * 30.0 + 0.2 + 0.4)
+    assert submit_envelope_s(3, 30.0) > 3 * 30.0
