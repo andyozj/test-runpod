@@ -61,6 +61,16 @@ class GenerationRequest(BaseModel):
 class JobCreated(BaseModel):
     """Response to a successful submission."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "job_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+                "status": "QUEUED",
+                "created_at": "2026-08-06T02:39:23Z",
+            }
+        }
+    )
+
     job_id: UUID
     status: str
     created_at: datetime
@@ -68,6 +78,17 @@ class JobCreated(BaseModel):
 
 class ErrorBody(BaseModel):
     """The error envelope every failure shares."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "code": "QUEUE_SATURATED",
+                "message": "You have reached your active job limit.",
+                "suggestion": "Retry after 22s.",
+                "correlation_id": "9f1c2b7e-2d5a-4a1e-9c0b-7a3f8e11d240",
+            }
+        }
+    )
 
     code: str
     message: str
@@ -87,6 +108,32 @@ class JobView(BaseModel):
     One shape with three populated states — running, completed, failed — so a
     client parses one response type regardless of outcome.
     """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "job_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+                "status": "COMPLETED",
+                "progress": {"step": 28, "total": 28, "percent": 100},
+                "result": {
+                    "image_base64": "iVBORw0KGgoAAAANSUhEUg...",
+                    "format": "png",
+                    "seed": 918273,
+                    "width": 1024,
+                    "height": 1024,
+                    "model_version": (
+                        "black-forest-labs/FLUX.1-dev@"
+                        "3de623fc3c33e44ffbe2bad470d0f45bccf2eb21"
+                    ),
+                    "inference_seconds": 21.4,
+                },
+                "error": None,
+                "created_at": "2026-08-06T02:39:23Z",
+                "updated_at": "2026-08-06T02:39:48Z",
+                "completed_at": "2026-08-06T02:39:48Z",
+            }
+        }
+    )
 
     job_id: UUID
     status: str
