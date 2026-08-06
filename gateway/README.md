@@ -1,6 +1,6 @@
-# Gateway
+# Gateway (spike)
 
-An API layer in front of the RunPod serverless endpoint. **Beyond the brief** — the graded deliverable is the worker, which is callable without any of this.
+An API layer in front of the RunPod serverless endpoint. **A spike, beyond the brief**: the graded deliverable is the worker, which is callable without any of this.
 
 ## Why it exists
 
@@ -8,7 +8,7 @@ Clients could call RunPod directly. What that costs:
 
 | Direct | With the gateway |
 |---|---|
-| Every client holds your RunPod API key — which is account-scoped and can also delete resources | Clients hold their own key; RunPod's stays server-side |
+| Every client holds your RunPod API key (account-scoped, can also delete resources) | Clients hold their own key; RunPod's stays server-side |
 | Clients speak RunPod's job vocabulary | Clients speak one API; RunPod is swappable |
 | No record of anything | Every job attributed to a caller, with prompt, result and timings |
 | A retried request generates and bills twice | Idempotency keys make retries free |
@@ -17,7 +17,7 @@ Clients could call RunPod directly. What that costs:
 
 ## Run it
 
-From the repo root — `compose.yaml` and `.env.example` live there:
+From the repo root (`compose.yaml` and `.env.example` live there):
 
 ```bash
 cp .env.example .env      # RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID, GATEWAY_API_KEYS
@@ -53,7 +53,7 @@ Headers: `Idempotency-Key` for safe retries, `X-Correlation-ID` to supply your o
 ## Structure
 
 ```
-core/       the rules. Imports nothing outward — enforced by import-linter
+core/       the rules. Imports nothing outward, enforced by import-linter
 adapters/   memory repository, RunPod HTTP client, blocklist
 api/        FastAPI routes, auth, wire schemas
 workers/    the reconciler
@@ -64,10 +64,10 @@ Everything is testable with no database and no endpoint, because every dependenc
 
 ## Not implemented
 
-Persistence is in-memory. Postgres and Alembic are specified in [`docs/specs/02-gateway-core.md`](../docs/specs/02-gateway-core.md); `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. Jobs do not survive a restart, and terminal jobs are evicted after an hour — results carry multi-MB images, so unbounded retention is an OOM, and RunPod's own copy expires after 30 minutes anyway.
+Persistence is in-memory. Postgres and Alembic are specified in [`docs/specs/02-gateway-core.md`](../docs/specs/02-gateway-core.md); `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. Jobs do not survive a restart, and terminal jobs are evicted after an hour: results carry multi-MB images, so unbounded retention is an OOM, and RunPod's own copy expires after 30 minutes anyway.
 
-`GATEWAY_API_KEYS` has no built-in default — an unset or empty value fails the gateway at startup. `compose.yaml` supplies `demo:local-development-key` for local runs only; the application itself never invents a credential, so set your own before exposing the port.
+`GATEWAY_API_KEYS` has no built-in default; an unset or empty value fails the gateway at startup. `compose.yaml` supplies `demo:local-development-key` for local runs only; the application itself never invents a credential, so set your own before exposing the port.
 
-Each API key is capped at `MAX_ACTIVE_JOBS_PER_KEY` (default 10) non-terminal jobs at once; submitting past the cap gets a `429` with `Retry-After`. That bounds one key's share of the queue — it is not a request-rate limit and not a spend cap.
+Each API key is capped at `MAX_ACTIVE_JOBS_PER_KEY` (default 10) non-terminal jobs at once; submitting past the cap gets a `429` with `Retry-After`. That bounds one key's share of the queue; it is not a request-rate limit and not a spend cap.
 
 The full gap list, ranked, is in [`docs/specs/08-production-readiness.md`](../docs/specs/08-production-readiness.md). The two that matter most: no per-caller request-rate limit, and no budget cap. Authentication answers *who*; nothing yet answers *how much you're spending*.

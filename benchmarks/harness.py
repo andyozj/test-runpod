@@ -542,7 +542,7 @@ def _product_sections(
         lines += [
             "",
             "$/hr is the pricing-page number; $/image is the one that should pick "
-            "the card — a faster expensive card can tie or beat a cheaper slow one. "
+            "the card: a faster expensive card can tie or beat a cheaper slow one. "
             "Rates as configured in `benchmarks/config.json`, dated there.",
         ]
     queue_rows = [
@@ -564,7 +564,7 @@ def _product_sections(
             f"({len(queue_rows)} jobs, workersMax={cfg.get('workers_max', 3)})",
             "",
             f"Queue wait: first job {delays[0]:.0f}s, last {delays[-1]:.0f}s, "
-            f"climbing ~{spacing:.1f}s per position — a linear drain, no failures, no timeouts. "
+            f"climbing ~{spacing:.1f}s per position: a linear drain, no failures, no timeouts. "
             "The queue is the product here: 4x overload became added latency, never an error.",
         ]
         if timeline:
@@ -621,12 +621,12 @@ def _comparisons_section(
         f"**20 steps vs the 28-step default:** ${cost_20:.4f} vs ${cost_28:.4f} per image "
         f"({'n/a' if cost_28 == 0 else f'{(1 - cost_20 / cost_28) * 100:.0f}% cheaper'}) "
         "and visually equivalent in the fixed-seed grid "
-        "(`samples/quality-grid/`) — per-pixel different, indistinguishable at arm's length. "
+        "(`samples/quality-grid/`): per-pixel different, indistinguishable at arm's length. "
         "The default is a quality ceiling, not the value optimum.",
         "",
         "**JPEG vs PNG at 1536²:** "
         f"{_p50(by_fmt.get('jpeg', []), 'payload_b64_bytes') / 1e6:.2f}MB vs "
-        f"{_p50(by_fmt.get('png', []), 'payload_b64_bytes') / 1e6:.2f}MB base64 — "
+        f"{_p50(by_fmt.get('png', []), 'payload_b64_bytes') / 1e6:.2f}MB base64, "
         f"{_p50(by_fmt.get('png', []), 'payload_b64_bytes') / max(_p50(by_fmt.get('jpeg', []), 'payload_b64_bytes'), 1):.1f}x smaller for polling clients.",
         "",
     ]
@@ -635,7 +635,7 @@ def _comparisons_section(
         on_p50 = _p50(fb["on"], "delay_ms") / 1000
         off_p50 = _p50(fb["off"], "delay_ms") / 1000
         comparisons += [
-            f"**FlashBoot on vs off:** {on_p50:.1f}s vs {off_p50:.1f}s post-idle start p50 — "
+            f"**FlashBoot on vs off:** {on_p50:.1f}s vs {off_p50:.1f}s post-idle start p50, "
             f"{off_p50 / max(on_p50, 0.01):.0f}x. The spec asserted this benefit before anything was deployed; "
             "this row is the assertion closed with data. It costs nothing, which makes disabling it strictly worse.",
             "",
@@ -651,7 +651,7 @@ def _comparisons_section(
         )
         comparisons += [
             f"**48GB tier vs A100 80GB:** ${main_p50 / 3600 * rate:.4f} vs "
-            f"${a100_p50 / 3600 * a100_rate:.4f} per image — a tie — at "
+            f"${a100_p50 / 3600 * a100_rate:.4f} per image (a tie) at "
             f"{a100_p50:.1f}s vs {main_p50:.1f}s exec p50 "
             f"({faster}). FLUX is "
             "memory-bandwidth-bound; HBM absorbs the +55% hourly rate. "
@@ -664,7 +664,7 @@ def _comparisons_section(
             f"~${market['typical_managed_usd']:.3f} typical managed and ~${market['bfl_api_usd']:.2f} at BFL's own API "
             f"({market['typical_managed_usd'] / cost_28:.1f}x and {market['bfl_api_usd'] / cost_28:.1f}x respectively). "
             "Honest caveats: our figure is execution-only (idle billing is additive and traffic-shaped), it excludes "
-            "the ops you are reading the runbook for, and FLUX.1-dev's licence is non-commercial — managed APIs "
+            "the ops you are reading the runbook for, and FLUX.1-dev's licence is non-commercial; managed APIs "
             "carry the commercial licence in their price. The multiple is real at scale; the licence decides who may use it. "
             f"(Market prices {market['sourced']}.)",
             "",
@@ -692,11 +692,16 @@ def render(cfg: dict[str, Any], tag: str) -> str:
     lines = [
         "# Benchmarks",
         "",
-        f"Measured {time.strftime('%Y-%m-%d')} against endpoint `<endpoint-id — supplied in the submission email>`, "
+        f"Measured {time.strftime('%Y-%m-%d')} against endpoint `<endpoint-id: supplied in the submission email>`, "
         f"image `{tag}`, GPU {cfg['gpu']}, model per response `model_version`. "
         f"Rate ${rate}/hr ({cfg['rate_date']}, re-verify before quoting). "
         f"Raw data: `benchmarks/raw.jsonl` ({len(records)} records). "
-        "Methodology: `docs/specs/09-benchmarks.md`; p50/p95 over N runs, fixed seed, one variable at a time.",
+        "Methodology: `docs/specs/09-benchmarks.md`; fixed seed, one variable at a time.",
+        "",
+        "**Read the N column before any percentile.** N is 3-10 per cell: sequential probes, "
+        "no sustained load. Enough to rank options (step count, GPU tier, image format); "
+        "not literal latency guarantees. SLO-grade p50/p95 needs a proper load test "
+        "(e.g. Locust) at production concurrency, which this harness does not do.",
         "",
         *comparisons,
         "## Cold start, decomposed",
@@ -778,7 +783,7 @@ def render(cfg: dict[str, Any], tag: str) -> str:
             "",
             "## Named outputs",
             "",
-            f"- `AVG_JOB_SECONDS = {avg:.1f}` — a p50, not a mean; feeds the gateway's `avg_job_s` queue-pressure setting",
+            f"- `AVG_JOB_S = {avg:.1f}`: a p50, not a mean; feeds the gateway's `avg_job_s` queue-pressure setting",
             f"- Cost per default image (1024², 28 steps): ${avg / 3600 * rate:.4f} execution-only",
         ]
     lines += [
@@ -787,10 +792,10 @@ def render(cfg: dict[str, Any], tag: str) -> str:
         "",
         "| Planned | Status |",
         "|---|---|",
-        '| Exact-GPU pinning | Not possible on serverless: scheduling is pool-based (the v2 API takes `gpu.pools`; the catalog assigns each card a pool), which is how an "NVIDIA L40S" request was served by an RTX PRO 6000 MIG. The levers are pool, CUDA filter and datacenter. Per-worker `gpuTypeId` exists in the v2 workers API — 403 on this account today, as are v2 catalog and GraphQL |',
+        '| Exact-GPU pinning | Not possible on serverless: scheduling is pool-based (the v2 API takes `gpu.pools`; the catalog assigns each card a pool), which is how an "NVIDIA L40S" request was served by an RTX PRO 6000 MIG. The levers are pool, CUDA filter and datacenter. Per-worker `gpuTypeId` exists in the v2 workers API, 403 on this account today, as are v2 catalog and GraphQL |',
         "| 4090 floor test | Dropped: it would only prove this worker's resident-bf16 policy needs >34GB. Offload (~27GB) and fp8 (~14GB) run FLUX on smaller cards; the claim is scoped in the README instead |",
         "| Weight-delivery three-way | Only cached models is deployed; volume was dropped in design, baked is built but not deployed |",
-        "| CFG 2× claim | Not measurable through the deployed contract — the input schema deliberately omits `true_cfg_scale` |",
+        "| CFG 2× claim | Not measurable through the deployed contract: the input schema deliberately omits `true_cfg_scale` |",
         "",
         "## Threats to validity",
         "",
