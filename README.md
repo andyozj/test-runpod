@@ -2,7 +2,7 @@
 
 A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod using cached models — the platform pre-stages the weights on host machines. The baked-weights image is built and published too — see [Weight delivery](#weight-delivery).
 
-> **Status:** the worker is implemented and tested; the endpoint is not yet deployed. `BENCHMARKS.md` does not exist until it is, and no figure below is presented as measured. See [Current state](#current-state).
+> **Status:** deployed 2026-08-06 — endpoint `7jrg4nu4b47fsv`, image `0.1.0-44c9643-slim`, cached-model staging in progress; first generation not yet verified. `BENCHMARKS.md` does not exist until a measured run completes, and no figure below is presented as measured. See [Current state](#current-state).
 
 ## Call it
 
@@ -231,9 +231,11 @@ docs/specs/         design, 10 documents
 
 | | |
 |---|---|
-| Worker implemented and tested | Yes — 64 tests, 96% coverage, no GPU required |
-| Endpoint deployed | **No** — pending RunPod credits |
-| `BENCHMARKS.md` | Not yet. Produced from a single measured run once deployed |
+| Worker implemented and tested | Yes — 75 worker tests, no GPU required; e2e suite pre-written for the live endpoint |
+| Image | `ghcr.io/andyozj/flux-worker:0.1.0-44c9643-slim`, 2.9GB, public, no secrets in any layer |
+| Endpoint | Created 2026-08-06: `flux-worker-cached` (`7jrg4nu4b47fsv`), cached-model staging in progress |
+| First verified generation | **Pending** — gates everything below |
+| `BENCHMARKS.md` | Not yet. Produced from a single measured run once verified |
 | Gateway | Core, async API and reconciler implemented with tests; runs locally via `compose.yaml` |
 
 Nothing in this README describes performance, because nothing has been measured yet. Every figure it will eventually carry comes from a run whose methodology is specified in [`docs/specs/09-benchmarks.md`](docs/specs/09-benchmarks.md).

@@ -19,6 +19,8 @@ Update on every deploy. **A rollback that begins with "work out which tag was go
 | GHCR write access | `echo $GHCR_TOKEN \| docker login ghcr.io -u USERNAME --password-stdin` |
 | Docker with buildx | `docker buildx version` |
 
+The GHCR token must be a **classic** PAT with `write:packages`. Fine-grained tokens have no packages scope and fail login — the permissions dropdown simply lacks the entry, which reads as "you're looking in the wrong place" rather than "wrong token type" (2026-08-06, an hour).
+
 `make weights-check` proves both build-blockers at once — the gated repo is reachable, and the ~24GB of duplicate single-file weights are excluded. Downloads nothing.
 
 ## Build and push
@@ -65,6 +67,17 @@ Then, on that endpoint in the console:
 2. **HuggingFace token** — the repo is gated; staging fails without one
 3. Leave `WEIGHTS_PATH` **unset**. The worker falls through to `MODEL_CACHE_ROOT` only when it is absent, so setting it would win and the cache would go unused
 
+The Model field is **console-only** — verified 2026-08-06 by searching the REST OpenAPI (23 paths, zero model fields). Until the API grows it, this is the one setting config-as-code cannot carry, and skipping it produces the exact all-workers-unhealthy signature below.
+
+**The image must be pullable before workers can boot.** A GHCR package is private by default even in a public account; the worker's system log shows `error pulling image: ... unauthorized`. Make the package public (github.com/users/OWNER/packages/container/flux-worker/settings) or attach a registry credential. Prove it the way RunPod's daemon sees it — repo visibility is a different setting and proves nothing:
+
+```bash
+TOKEN=$(curl -s 'https://ghcr.io/token?scope=repository:OWNER/flux-worker:pull' | jq -r .token)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  https://ghcr.io/v2/OWNER/flux-worker/manifests/TAG        # 200 = pullable
+```
+
 Record the tag and the previous tag in the table above.
 
 ### Warm it before demonstrating
@@ -102,6 +115,8 @@ Ordered by how often each is actually the cause.
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| All workers `unhealthy`, system log ends at `worker is ready`, container log empty | Model field not set — the container crashed at warm-up before the SDK attached, and cold-start output is not always surfaced | Reproduce locally: `docker run --rm --platform linux/amd64 $IMAGE:$TAG-slim python -m worker.handler` prints exactly what the worker would have — the resolver traceback names the missing mechanism (2026-08-06: this was the cause) |
+| System log: `error pulling image ... unauthorized` | GHCR package still private — the default, even in a public account | The anonymous-pull check above; package settings, not repo settings |
 | Worker starts and dies immediately | Image built for arm64 | `docker inspect $IMAGE:$TAG-slim \| grep Architecture` — must be `amd64` |
 | Every job fails at startup | Weights not found, or cache holds a different revision | Worker logs — `weights_resolved` on success; otherwise a message naming all three mechanisms |
 | Refuses to start, revision mismatch | Cache staged a snapshot other than the pinned one | Reconcile `contracts/model-revision.txt` with what the message reports |

@@ -2,6 +2,12 @@
 
 2026-08-05, evening. Everything below is tested unless marked otherwise.
 
+> **2026-08-06 update:** deployed. Image pushed (`0.1.0-44c9643-slim`, 2.9GB),
+> endpoint `7jrg4nu4b47fsv` created via the REST API, cached-model staging in
+> progress. Deploy-day findings live in `docs/RUNBOOK.md` (GHCR classic PAT,
+> package visibility, console-only Model field, the all-unhealthy signature).
+> First verified generation pending; then benchmarks.
+
 ## The goal
 
 RunPod's case study: deploy FLUX.1-dev (a text-to-image model) as a serverless

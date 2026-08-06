@@ -167,6 +167,8 @@ Each file carries the GPU priority list, min and max workers, idle timeout, exec
 
 The console is not the source of truth. "Why is the idle timeout 60s?" must be answerable from the repository and reviewable in a diff, and an endpoint deleted by accident must be reconstructible without archaeology. Recording values in a runbook would achieve the first two; only applied config achieves the third.
 
+One documented exception: the cached-model **Model field is console-only** — the REST API exposes no model field (verified against its OpenAPI, 2026-08-06). It is recorded in the runbook's deploy procedure as the single manual step, and this paragraph is the reminder to fold it into `apply_endpoint.py` the day the API grows it.
+
 ## Secrets
 
 RunPod provides a secrets manager. Secrets are stored encrypted and referenced from a template's environment section:
