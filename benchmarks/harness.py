@@ -514,7 +514,7 @@ def _product_sections(
             "",
             "## GPU tiers, same workload (1024², 28 steps)",
             "",
-            "| Card | N | rate $/hr | $/second | exec p50 | $/image at p50 |",
+            "| Card | N | rate \\$/hr | \\$/second | exec p50 | \\$/image at p50 |",
             "|---|---|---|---|---|---|",
         ]
         rates = cfg.get("gpu_rates_usd_hr", {})
@@ -530,8 +530,8 @@ def _product_sections(
             )
             s = _stats([r["execution_ms"] / 1000 for r in rows])
             return (
-                f"| {label} | {s['n']} | ${card_rate:.2f} | ${card_rate / 3600:.5f} "
-                f"| {s['p50']:.1f}s | ${s['p50'] / 3600 * card_rate:.4f} |"
+                f"| {label} | {s['n']} | \\${card_rate:.2f} | \\${card_rate / 3600:.5f} "
+                f"| {s['p50']:.1f}s | \\${s['p50'] / 3600 * card_rate:.4f} |"
             )
 
         main_28 = _rows(records, "steps").get(28, [])
@@ -541,7 +541,7 @@ def _product_sections(
             lines.append(card_row(label, rows))
         lines += [
             "",
-            "$/hr is the pricing-page number; $/image is the one that should pick "
+            "\\$/hr is the pricing-page number; \\$/image is the one that should pick "
             "the card: a faster expensive card can tie or beat a cheaper slow one. "
             "Rates as configured in `benchmarks/config.json`, dated there.",
         ]
@@ -618,7 +618,7 @@ def _comparisons_section(
         "when staging lands on a fresh host). The whole serverless trade in one row: "
         "pin an active worker for demos, trust FlashBoot for steady traffic, budget minutes for bursts from zero.",
         "",
-        f"**20 steps vs the 28-step default:** ${cost_20:.4f} vs ${cost_28:.4f} per image "
+        f"**20 steps vs the 28-step default:** \\${cost_20:.4f} vs \\${cost_28:.4f} per image "
         f"({'n/a' if cost_28 == 0 else f'{(1 - cost_20 / cost_28) * 100:.0f}% cheaper'}) "
         "and visually equivalent in the fixed-seed grid "
         "(`samples/quality-grid/`): per-pixel different, indistinguishable at arm's length. "
@@ -650,18 +650,18 @@ def _comparisons_section(
             "n/a" if main_p50 == 0 else f"{(1 - a100_p50 / main_p50) * 100:.0f}% faster"
         )
         comparisons += [
-            f"**48GB tier vs A100 80GB:** ${main_p50 / 3600 * rate:.4f} vs "
-            f"${a100_p50 / 3600 * a100_rate:.4f} per image (a tie) at "
+            f"**48GB tier vs A100 80GB:** \\${main_p50 / 3600 * rate:.4f} vs "
+            f"\\${a100_p50 / 3600 * a100_rate:.4f} per image (a tie) at "
             f"{a100_p50:.1f}s vs {main_p50:.1f}s exec p50 "
             f"({faster}). FLUX is "
             "memory-bandwidth-bound; HBM absorbs the +55% hourly rate. "
-            "$/hr picks the wrong card, $/image the right one.",
+            "\\$/hr picks the wrong card, \\$/image the right one.",
             "",
         ]
     if market and cost_28:
         comparisons += [
-            f"**Self-hosted vs managed FLUX.1-dev APIs:** ${cost_28:.4f} measured here vs "
-            f"~${market['typical_managed_usd']:.3f} typical managed and ~${market['bfl_api_usd']:.2f} at BFL's own API "
+            f"**Self-hosted vs managed FLUX.1-dev APIs:** \\${cost_28:.4f} measured here vs "
+            f"~\\${market['typical_managed_usd']:.3f} typical managed and ~\\${market['bfl_api_usd']:.2f} at BFL's own API "
             f"({market['typical_managed_usd'] / cost_28:.1f}x and {market['bfl_api_usd'] / cost_28:.1f}x respectively). "
             "Honest caveats: our figure is execution-only (idle billing is additive and traffic-shaped), it excludes "
             "the ops you are reading the runbook for, and FLUX.1-dev's licence is non-commercial; managed APIs "

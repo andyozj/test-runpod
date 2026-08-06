@@ -18,7 +18,7 @@ The design record: what was chosen, what was rejected, and what each choice know
 | 10 | Completion | Reconciler polling, lease + derived submit grace | Up to one 2s tick of phantom latency; N replicas = N pollers |
 | 11 | Guardrails | Same blocklist both tiers, fail-closed; crash ≠ block | The worker's check runs on billed GPU time |
 | 12 | Negative prompts | Not exposed | A schema change to add later |
-| 13 | GPU and defaults | Chosen by $/image, not $/hr | 28-step default kept despite 20 steps being 28% cheaper |
+| 13 | GPU and defaults | Chosen by \$/image, not \$/hr | 28-step default kept despite 20 steps being 28% cheaper |
 | 14 | CI/CD | Tag-driven versioning; checks gate everything; deploys human-only | Post-deploy smoke test detects, does not prevent; rollback is manual |
 | 15 | Observability | `structlog` JSON to stdout; one correlation ID; log-based health series | No metrics export, no tracing |
 | 16 | Testing | GPU-free unit/integration; contract conformance; recording fakes | Platform divergence caught only by e2e |
@@ -159,7 +159,7 @@ The design record: what was chosen, what was rejected, and what each choice know
 
 **Context.** The platform is fixed by the brief; the open choices were the card and the generation defaults.
 
-**Choice.** Measured, then chosen by cost per image, not hourly rate. The 48GB tier at $1.75/hr and the A100 80GB at $2.72/hr tie at $0.0106 vs $0.0108 per default image — the A100 is 35% faster (14.3s vs 21.8s exec p50) and its HBM absorbs the +55% rate, because FLUX is memory-bandwidth-bound. $/hr picks the wrong card; $/image picks the right one. The steps sweep showed 20 steps at $0.0076 vs the 28-step default at $0.0106 — 28% cheaper and visually equivalent in the fixed-seed grid (`samples/quality-grid/`). The default stays 28 as a quality ceiling; the benchmark documents 20 as the value optimum rather than silently changing the contract.
+**Choice.** Measured, then chosen by cost per image, not hourly rate. The 48GB tier at \$1.75/hr and the A100 80GB at \$2.72/hr tie at \$0.0106 vs \$0.0108 per default image — the A100 is 35% faster (14.3s vs 21.8s exec p50) and its HBM absorbs the +55% rate, because FLUX is memory-bandwidth-bound. \$/hr picks the wrong card; \$/image picks the right one. The steps sweep showed 20 steps at \$0.0076 vs the 28-step default at \$0.0106 — 28% cheaper and visually equivalent in the fixed-seed grid (`samples/quality-grid/`). The default stays 28 as a quality ceiling; the benchmark documents 20 as the value optimum rather than silently changing the contract.
 
 **Trade-off accepted.** The 48GB floor is a policy artifact: this worker keeps everything resident in bf16 (~34GB). Offload (~27GB) or fp8 (~14GB) run FLUX on smaller cards, trading seconds per job — scoped in the README, and the planned 4090 floor test was dropped because it would only prove this policy's own requirement.
 

@@ -8,13 +8,13 @@ Measured 2026-08-07 against endpoint `<endpoint-id: supplied in the submission e
 
 **Warm vs post-idle vs true cold:** 0.1s vs 16.0s vs 90s p50 (true-cold max 518s, when staging lands on a fresh host). The whole serverless trade in one row: pin an active worker for demos, trust FlashBoot for steady traffic, budget minutes for bursts from zero.
 
-**20 steps vs the 28-step default:** $0.0076 vs $0.0106 per image (28% cheaper) and visually equivalent in the fixed-seed grid (`samples/quality-grid/`): per-pixel different, indistinguishable at arm's length. The default is a quality ceiling, not the value optimum.
+**20 steps vs the 28-step default:** \$0.0076 vs \$0.0106 per image (28% cheaper) and visually equivalent in the fixed-seed grid (`samples/quality-grid/`): per-pixel different, indistinguishable at arm's length. The default is a quality ceiling, not the value optimum.
 
 **JPEG vs PNG at 1536²:** 0.49MB vs 2.85MB base64, 5.8x smaller for polling clients.
 
 **FlashBoot on vs off:** 1.0s vs 22.0s post-idle start p50, 23x. The spec asserted this benefit before anything was deployed; this row is the assertion closed with data. It costs nothing, which makes disabling it strictly worse.
 
-**48GB tier vs A100 80GB:** $0.0106 vs $0.0108 per image (a tie) at 14.3s vs 21.8s exec p50 (35% faster). FLUX is memory-bandwidth-bound; HBM absorbs the +55% hourly rate. $/hr picks the wrong card, $/image the right one.
+**48GB tier vs A100 80GB:** \$0.0106 vs \$0.0108 per image (a tie) at 14.3s vs 21.8s exec p50 (35% faster). FLUX is memory-bandwidth-bound; HBM absorbs the +55% hourly rate. \$/hr picks the wrong card, \$/image the right one.
 
 ## Cold start, decomposed
 
@@ -58,12 +58,12 @@ Quality grid for the same seeds: `samples/quality-grid/`.
 
 ## GPU tiers, same workload (1024², 28 steps)
 
-| Card | N | rate $/hr | $/second | exec p50 | $/image at p50 |
+| Card | N | rate \$/hr | \$/second | exec p50 | \$/image at p50 |
 |---|---|---|---|---|---|
-| 48GB tier (served: RTX PRO 6000 MIG) | 10 | $1.75 | $0.00049 | 21.8s | $0.0106 |
-| A100 80GB PCIe | 5 | $2.72 | $0.00076 | 14.3s | $0.0108 |
+| 48GB tier (served: RTX PRO 6000 MIG) | 10 | \$1.75 | \$0.00049 | 21.8s | \$0.0106 |
+| A100 80GB PCIe | 5 | \$2.72 | \$0.00076 | 14.3s | \$0.0108 |
 
-$/hr is the pricing-page number; $/image is the one that should pick the card: a faster expensive card can tie or beat a cheaper slow one. Rates as configured in `benchmarks/config.json`, dated there.
+\$/hr is the pricing-page number; \$/image is the one that should pick the card: a faster expensive card can tie or beat a cheaper slow one. Rates as configured in `benchmarks/config.json`, dated there.
 
 ## Queue under a 4x burst (12 jobs, workersMax=3)
 

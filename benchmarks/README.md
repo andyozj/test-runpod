@@ -47,4 +47,4 @@ One file, no CLI equivalents. What each knob moves:
 | `concurrency_burst`, `queue_burst` | Simultaneous submissions for the concurrency and queue sections |
 | `cold_cycles`, `idle_timeout_s`, `workers_max` | Cold-start section: how many scale-to-zero cycles, how long past the endpoint's idle timeout to wait (`+20s`), and the ceiling `workersMax` is restored to after being driven to 0 — it must match the endpoint's real configuration |
 | `flashboot_idle_probes` | Post-idle resume probes |
-| `gpu`, `gpu_rates_usd_hr`, `rate_usd_hr`, `rate_date` | Card labels and $/hr for the cost columns. Rates are hand-entered and dated; stale rates make the $/image figures wrong |
+| `gpu`, `gpu_rates_usd_hr`, `rate_usd_hr`, `rate_date` | Card labels and \$/hr for the cost columns. Rates are hand-entered and dated; stale rates make the \$/image figures wrong |
