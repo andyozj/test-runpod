@@ -4,16 +4,23 @@ An API layer in front of the RunPod serverless endpoint. **A spike, beyond the b
 
 ## Why it exists
 
-Clients could call RunPod directly. What that costs:
+One API in front of the endpoint, so clients speak this vocabulary instead of RunPod's and never hold RunPod's key.
 
-| Direct | With the gateway |
-|---|---|
-| Every client holds your RunPod API key (account-scoped, can also delete resources) | Clients hold their own key; RunPod's stays server-side |
-| Clients speak RunPod's job vocabulary | Clients speak one API; RunPod is swappable |
-| No record of anything | Every job attributed to a caller, with prompt, result and timings |
-| A retried request generates and bills twice | Idempotency keys make retries free |
-| An upstream blip is a user-visible failure | Retry and circuit breaker absorb it |
-| One transport, forever | SSE, webhooks and MCP are additions, not rewrites |
+**It adds:**
+
+- **Caller authentication.** Per-caller `key_id:secret` pairs from `GATEWAY_API_KEYS`, matched constant-time against SHA-256 digests (`settings.resolve_key`, enforced in `api/app.py:authenticate`). RunPod's own account-scoped key — which can delete resources — stays server-side. Every job is attributed to a caller, with prompt, result and timings.
+- **A per-key active-job cap.** `MAX_ACTIVE_JOBS_PER_KEY` non-terminal jobs (`core/service._check_active_job_cap`), so one runaway credential cannot occupy the queue. Not a request-rate limit, not a spend cap.
+- **Idempotent submission.** An `Idempotency-Key` replays the original job instead of generating and billing twice. `core/service.submit` resolves a replay on row *identity* before shedding, and releases the key when a job is shed, so a 429'd retry can still become a real attempt.
+- **A job store.** `adapters/memory.InMemoryJobRepository` behind a protocol: one `asyncio.Lock` makes the idempotent insert atomic; terminal jobs are evicted after an hour.
+- **Reconciliation.** Nothing tells the gateway when a job finishes, so `workers/reconciler` polls and `core/service.reconcile` resolves each in-flight job — claims are leased (`claim_unresolved(lease_s=...)`) and released per job; a job with no upstream id is adopted and resubmitted only after `submit_grace_s`.
+- **Queue-pressure shedding.** Estimated wait over `MAX_QUEUE_WAIT_S` returns 429 with a `Retry-After` jittered 0.8–1.2×, so a shed burst does not retry in lockstep. Fails open when the reading is missing or stale.
+- **Upstream resilience.** Bounded retries with jittered backoff plus a circuit breaker with an exclusive half-open probe (`adapters/runpod_client`) absorb an upstream blip instead of surfacing it.
+
+**Not its job:**
+
+- **Image generation and the authoritative content verdict.** The gateway runs the shared prompt blocklist as an early reject (`adapters/guardrails`, same `contracts/blocklist.json` and `normalisation.json` the worker reads, both tiers pinned by `contracts/guardrail-corpus.json`). The worker re-checks the prompt and owns the image-stage verdict outright.
+- **Persistence beyond process lifetime.** Jobs are lost on restart; Postgres is specified, unimplemented.
+- **Multi-instance operation.** The store is per-process, so idempotency and the per-key cap hold within one instance only. The invariants a database port inherits — atomic idempotent insert, claim leasing, race-safe cap counting — are in [`docs/DESIGN.md`](../docs/DESIGN.md#7-ports-and-adapters-in-memory-persistence).
 
 ## Run it
 

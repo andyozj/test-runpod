@@ -2,6 +2,18 @@
 
 The graded deliverable: a RunPod serverless handler running FLUX.1-dev. The repo-level [README](../README.md) documents the API, errors, and weight delivery; this file covers the package.
 
+## What it does
+
+One job in, one image out. The contract, ahead of the mechanism:
+
+- **Generate.** Accept one validated generation request, return one image (PNG or JPEG, base64) — one job at a time per worker, `concurrency_modifier: 1`.
+- **Enforce content policy, fail closed, at both stages.** A prompt check before any GPU time and an image check on the decoded bytes before the image is returned. A guardrail that raises still stops the job; it reports `INFERENCE_FAILED`, not a block, because a classifier crash is not a verdict.
+- **Make every image reproducible.** The seed is echoed whether the caller supplied it or the worker drew it, alongside the effective dimensions, steps, guidance, and `model_version` (`{model_id}@{revision}`) — the revision *discovered* from the weights actually loaded, not a pinned constant.
+- **Report failure and progress structurally.** Every caller-visible failure is a coded error envelope from `contracts/error-codes.json`; progress is coarse by design, ~10 `progress_update` calls per job at 10-point strides.
+- **Resolve its own weights at startup.** `weights.py` tries `WEIGHTS_PATH`, then the model cache, and refuses rather than guess between ambiguous snapshots — so a misconfigured mount fails fast instead of silently downloading ~33GB per cold start.
+
+**Not its job.** Queuing, autoscaling 0→3, retries, caller authentication, and billing. The platform owns those, configured in [`deploy/endpoints/`](../deploy/endpoints/) — not in this code. Per-job mechanics: [§Request lifecycle](#request-lifecycle).
+
 ## Layout
 
 ```
