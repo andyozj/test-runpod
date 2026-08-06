@@ -29,5 +29,11 @@
   "concurrency_burst": 6,
   "cold_cycles": 3,
   "idle_timeout_s": 60,
-  "workers_max": 3
+  "workers_max": 3,
+  "queue_burst": 12,
+  "flashboot_idle_probes": 3,
+  "gpu_rates_usd_hr": {
+    "48GB tier (served: RTX PRO 6000 MIG)": 1.75,
+    "A100 80GB PCIe": 2.72
+  }
 }

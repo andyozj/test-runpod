@@ -153,7 +153,7 @@ Not a performance measurement, but it is what makes the performance measurement 
 
 ## Harness
 
-`client/benchmark.py`, driven by a config file, emitting JSONL raw results plus a rendered markdown table.
+`benchmarks/harness.py`, driven by a config file, emitting JSONL raw results plus a rendered markdown table.
 
 - Runs against a **fake client** during development, so it is written and tested in Phase 2a with no credits and no GPU.
 - Raw JSONL is committed alongside the summary. A summary table without its underlying data cannot be re-analysed or checked.
