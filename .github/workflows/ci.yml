@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
+    branches: ["**"] # tags are covered by deploy.yml, which calls this workflow
   pull_request:
+  workflow_call: # the deploy workflow runs these same gates before shipping
 
 jobs:
   check:

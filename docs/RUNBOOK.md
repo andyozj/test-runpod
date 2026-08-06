@@ -28,12 +28,11 @@ The GHCR token must be a **classic** PAT with `write:packages`. Fine-grained tok
 
 **Build locally.** The image is ~2.9GB: no weights, and no CUDA base image, because the torch wheel carries its own libraries. There is no Pod in this procedure — an earlier revision baked a 45GB image and needed one; that stopped being true.
 
-```bash
-export IMAGE=ghcr.io/OWNER/flux-worker
-export TAG=0.1.0-$(git rev-parse --short HEAD)
+**Versioning:** the most recent `v*` git tag names the version; the commit SHA makes the image tag immutable. `make build-slim` derives both — `v0.1.0` at `abc1234` builds `0.1.0-abc1234-slim`. Bump by tagging: `git tag -a v0.2.0 -m "..." && git push --tags`.
 
-make build-slim IMAGE=$IMAGE TAG=$TAG      # ~2.9GB, no weights
-docker push $IMAGE:$TAG-slim
+```bash
+make build-slim                            # IMAGE/TAG derived; override if needed
+docker push ghcr.io/andyozj/flux-worker:$(make -s print-tag)-slim
 ```
 
 `--platform linux/amd64` is set in the Makefile. Building on an arm64 Mac without it produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
@@ -83,6 +82,22 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 
 Record the tag and the previous tag in the table above.
 
+### Deploy via GitHub Actions
+
+`.github/workflows/deploy.yml` runs the same procedure hands-off:
+
+- **Actions → deploy → Run workflow** with `tag` empty: runs the full CI
+  gates, builds from that ref, pushes to GHCR, applies the chosen config.
+- With `tag` set to a published image tag (e.g. `0.1.0-abc1234-slim`):
+  skips the build and just applies — that is the rollback path.
+- Pushing a `v*` git tag builds and publishes the image but never deploys;
+  deploys cost money and bounce workers, so they stay a button press.
+- `no_bounce` skips the worker bounce for config-only changes.
+
+One-time setup: repo secret `RUNPOD_API_KEY`, and the GHCR package made
+public after the first push (the pullability check above applies). The
+console-only Model field still has to be set once per endpoint by hand.
+
 ### Warm it before demonstrating
 
 ```bash
@@ -91,7 +106,7 @@ curl -s -X POST "https://api.runpod.ai/v2/$ENDPOINT_ID/runsync" \
   -d '{"input": {"prompt": "warmup", "num_inference_steps": 4}}' > /dev/null
 ```
 
-A cold worker spends 30-60s loading before it generates anything. `/runsync` holds the connection through that and may time out — which would make the demo look broken on the first call. Setting **active workers to 1** for the demo window removes cold starts entirely and bills continuously; set it back to 0 afterwards.
+A post-idle worker resumes in ~15s p50, but a true cold start on a fresh host measured 90-518s (`BENCHMARKS.md`). `/runsync` holds the connection through neither and may time out — which would make the demo look broken on the first call. Setting **active workers to 1** for the demo window removes cold starts entirely and bills continuously; set it back to 0 afterwards.
 
 ## Verify
 

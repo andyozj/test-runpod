@@ -1,0 +1,103 @@
+# Build, push and deploy the slim worker image.
+#
+# Two entry points:
+#   - Manual (workflow_dispatch): the deploy path. Leave `tag` empty to build
+#     from the chosen ref and deploy it; pass an existing tag to deploy (or
+#     roll back to) an already-published image without rebuilding.
+#   - Tag push (v*): builds and publishes the image for that version, but
+#     never deploys — deploys cost money and bounce workers, so they stay a
+#     human decision.
+#
+# Requirements, one-time:
+#   - Repo secret RUNPOD_API_KEY (deploys only; builds need nothing).
+#   - After the first push, set the GHCR package public (or add registry
+#     credentials in RunPod) so the endpoint can pull.
+#
+# Versioning: image tags are <version>-<sha>-slim, where <version> comes from
+# the latest v* git tag. Immutable by construction — apply_endpoint.py
+# refuses moving tags, which is what makes "rollback = redeploy the previous
+# tag" true.
+
+name: deploy
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing image tag to deploy (e.g. 0.1.0-abc1234-slim). Empty = build from this ref."
+        required: false
+      config:
+        description: "Endpoint config to apply"
+        type: choice
+        default: cached
+        options: [cached, baked]
+      no_bounce:
+        description: "Skip the worker bounce (config-only changes)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: ${{ !inputs.tag }}
+    uses: ./.github/workflows/ci.yml
+
+  build-push:
+    if: ${{ !inputs.tag }}
+    needs: [checks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe needs tag history
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push slim image
+        id: build
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || echo 0.0.0-untagged)
+          TAG="${VERSION}-$(git rev-parse --short HEAD)"
+          IMAGE=ghcr.io/${{ github.repository_owner }}/flux-worker
+          docker buildx build --platform linux/amd64 \
+            --build-arg BAKE_WEIGHTS=false \
+            -f worker/Dockerfile -t "$IMAGE:$TAG-slim" --push .
+          echo "tag=$TAG-slim" >> "$GITHUB_OUTPUT"
+          echo "pushed $IMAGE:$TAG-slim" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    # Deploys only from the manual entry point; a tag push stops at publish.
+    if: ${{ github.event_name == 'workflow_dispatch' && always() && !cancelled() && !failure() }}
+    needs: [build-push]
+    runs-on: ubuntu-latest
+    environment: runpod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+
+      - name: Apply endpoint config
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          TAG="${{ inputs.tag || needs.build-push.outputs.tag }}"
+          FLAGS=""
+          if [ "${{ inputs.no_bounce }}" = "true" ]; then FLAGS="--no-bounce"; fi
+          uv run --no-project --with pyyaml python scripts/apply_endpoint.py \
+            --config "deploy/endpoints/${{ inputs.config || 'cached' }}.yaml" \
+            --tag "$TAG" $FLAGS
+          echo "deployed $TAG (${{ inputs.config || 'cached' }})" >> "$GITHUB_STEP_SUMMARY"

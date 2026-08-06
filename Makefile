@@ -1,9 +1,16 @@
 PACKAGES := worker gateway
 
+# Versioning: the most recent v* tag names the version; the commit SHA makes
+# the image tag immutable (apply_endpoint.py refuses moving tags). Bump by
+# tagging: `git tag -a v0.2.0 -m ... && git push --tags`.
 # Override on the command line for other registries or explicit versions:
-#   make build-slim IMAGE=ghcr.io/you/flux-worker TAG=0.1.0-abc1234
+#   make build-slim IMAGE=ghcr.io/you/flux-worker TAG=0.2.0-abc1234
+VERSION ?= $(shell git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || true)
+ifeq ($(VERSION),)
+VERSION := 0.0.0-untagged
+endif
 IMAGE ?= ghcr.io/andyozj/flux-worker
-TAG ?= 0.1.0-$(shell git rev-parse --short HEAD)
+TAG ?= $(VERSION)-$(shell git rev-parse --short HEAD)
 
 .DEFAULT_GOAL := help
 
@@ -11,6 +18,10 @@ TAG ?= 0.1.0-$(shell git rev-parse --short HEAD)
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: print-tag
+print-tag: ## Print the derived image tag (version-sha)
+	@echo $(TAG)
 
 .PHONY: install
 install: ## Sync both package environments

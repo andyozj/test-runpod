@@ -163,13 +163,13 @@ global.
 The deployed image is ~2.9GB — no weights, and no CUDA base image, since the torch wheel carries its own libraries. **Build it locally**; there is no Pod in the procedure. Full steps in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ```bash
-export HF_TOKEN=...   # requires accepting the FLUX.1-dev licence on HuggingFace
-
-make build-slim       # tags ghcr.io/andyozj/flux-worker:0.1.0-<sha>-slim
-docker push ghcr.io/andyozj/flux-worker:0.1.0-$(git rev-parse --short HEAD)-slim
+make build-slim       # tags ghcr.io/andyozj/flux-worker:<version>-<sha>-slim
+docker push ghcr.io/andyozj/flux-worker:$(make -s print-tag)-slim
 ```
 
-`IMAGE` and `TAG` have working defaults in the Makefile (`ghcr.io/andyozj/flux-worker`, `0.1.0-<git-sha>`); override them on the command line for another registry. `--platform linux/amd64` is set in the Makefile — without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
+Versioning is tag-driven: the most recent `v*` git tag names the version, the commit SHA makes the image tag immutable, and `make print-tag` shows the result. Override `IMAGE`/`TAG` on the command line for another registry. `--platform linux/amd64` is set in the Makefile — without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
+
+CD: `.github/workflows/deploy.yml` runs CI, builds, pushes and applies from one button (rollback = re-run with the previous tag); a `v*` tag push publishes the image without deploying. Details in the [RUNBOOK](docs/RUNBOOK.md).
 
 ### Weight delivery
 
