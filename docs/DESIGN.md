@@ -63,7 +63,7 @@ The design record: what was chosen, what was rejected, and what each choice know
 
 **Trade-off accepted.** Isolation forbids a shared package, so the contract exists twice. Options weighed: a third package (a third `pyproject.toml`, lockfile, and publish step for ~10 fields), relaxing isolation (loses the guarantee keeping both images honest), or duplicating with drift made detectable. Duplication won. Five files at the root — `contracts/generation-request.schema.json`, `error-codes.json`, `blocklist.json`, `normalisation.json`, `guardrail-corpus.json` — are the source of truth; both suites assert conformance, so changing a field fails both packages until both follow. The behaviour a shared package would have bought, without shipping a third package.
 
-**Evidence.** `contracts/`; conformance tests in `worker/tests/unit/test_contracts.py` and `gateway/tests/unit/test_contracts.py`.
+**Evidence.** `contracts/`; conformance tests in `worker/tests/unit/test_contracts.py` and `gateway/tests/unit/test_contracts.py`. Both tiers and the contract files are drawn in [`README.md` §Design](../README.md#design).
 
 ## 5. Async-only interface
 

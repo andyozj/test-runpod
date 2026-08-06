@@ -230,6 +230,38 @@ Two details that will otherwise cost you an hour each:
 
 ## Design
 
+The delivered system is caller → RunPod → worker; the gateway box is a spike beyond the brief, and `contracts/` is what binds the two tiers.
+
+```mermaid
+graph LR
+  curl["curl"] --> api
+  cli["client/generate.py"] --> api
+
+  subgraph platform["RunPod Serverless"]
+    api["REST API<br/>/run, /runsync, /status"] --> queue["endpoint queue<br/>deploy/endpoints/*.yaml"]
+    queue --> validate
+    subgraph worker["worker container - worker/src/worker"]
+      validate["handler: validate<br/>schemas.py"] --> guard["handler: guardrails<br/>guardrails.py"]
+      guard --> infer["inference.py<br/>FluxPipeline via pipeline.py"]
+      infer --> encode["handler: base64 encode"]
+    end
+    cache[("platform model cache<br/>weights.resolve")] --> infer
+  end
+  encode -- "image_base64" --> api
+
+  subgraph gw["gateway/ - spike, beyond the brief"]
+    http["api/app.py<br/>POST /v1/jobs"] --> svc["core/service.py"]
+    svc --> gwguard["adapters/guardrails.py"]
+    svc --> store["adapters/memory.py<br/>in-memory job store"]
+    svc --> rp["adapters/runpod_client.py"]
+    rec["workers/reconciler.py"] --> svc
+  end
+  rp -- "POST run, GET status" --> api
+
+  ct["contracts/<br/>blocklist.json<br/>normalisation.json<br/>error-codes.json"] -.-> guard
+  ct -.-> gwguard
+```
+
 | | |
 |---|---|
 | Model | FLUX.1-dev, bf16, unquantized. The loaded revision is discovered from the staged snapshot and reported on every result; cached models offer no revision control, so it is a reported fact, not a pin |

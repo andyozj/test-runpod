@@ -127,6 +127,31 @@ Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's
 
 ### Deploy via GitHub Actions
 
+```mermaid
+sequenceDiagram
+    actor Op as Operator
+    participant GHA as GitHub Actions
+    participant GHCR
+    participant RP as RunPod API
+    participant EP as Live endpoint
+
+    Op->>GHA: workflow_dispatch: tag, config, no_bounce
+    GHA->>GHA: checks - ci.yml, both packages: format, lint, types, tests
+    alt tag input empty
+        GHA->>GHCR: build-push - buildx linux/amd64, push version-sha-slim
+    else existing tag supplied
+        GHA-->>GHA: build-push skipped - the rollback path
+    end
+    GHA->>GHCR: verify-tag - docker manifest inspect
+    GHCR-->>GHA: manifest exists
+    Op->>GHA: approve the runpod environment
+    GHA->>RP: deploy - apply_endpoint.py: upsert template, upsert endpoint, bounce
+    RP-->>GHA: template id, endpoint id
+    GHA->>EP: smoke-test - pytest -m gpu, 7 e2e cases
+    EP-->>GHA: pass or fail
+    Note over Op,EP: A failed smoke-test fails the workflow. Rollback is manual - re-run deploy with the previous tag. smoke-test runs in the same runpod environment as deploy.
+```
+
 `.github/workflows/deploy.yml` runs the same procedure hands-off:
 
 - **Actions → deploy → Run workflow** with `tag` empty: runs the full CI
@@ -138,7 +163,7 @@ Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's
   deploys cost money and bounce workers, so they stay a button press.
 - `no_bounce` skips the worker bounce for config-only changes.
 
-Job order: `checks` → `build-push` → `verify-tag` → `deploy` → `smoke-test`.
+Conditions on each job:
 
 - `checks` (the whole of `ci.yml`) has no branch condition, so it runs on the
   tag-push entry point too. A `v*` push cannot publish an image that failed CI.
