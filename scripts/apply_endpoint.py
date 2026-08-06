@@ -236,7 +236,31 @@ def endpoint_body(
     return body
 
 
-def apply(config: dict[str, Any], tag: str, api_key: str, dry_run: bool) -> int:
+def _bounce_workers(endpoint_id: str, workers_max: int, api_key: str) -> None:
+    """Force every worker to restart on the new release.
+
+    FlashBoot-retained workers do not re-pull on release — a resumed worker
+    keeps serving the previous image indefinitely (observed 2026-08-06).
+    Dropping workersMax to zero evicts the retained state; restoring it lets
+    fresh workers boot the current image. Submissions 409 briefly during the
+    transition.
+
+    Args:
+        endpoint_id: The endpoint to bounce.
+        workers_max: The configured ceiling to restore.
+        api_key: RunPod API key.
+    """
+    import time
+
+    _request("PATCH", f"/endpoints/{endpoint_id}", api_key, {"workersMax": 0})
+    time.sleep(20)
+    _request("PATCH", f"/endpoints/{endpoint_id}", api_key, {"workersMax": workers_max})
+    print(f"workers bounced   0 -> {workers_max}; stale FlashBoot state evicted")
+
+
+def apply(
+    config: dict[str, Any], tag: str, api_key: str, dry_run: bool, bounce: bool
+) -> int:
     """Upsert the template, then the endpoint.
 
     Args:
@@ -244,10 +268,12 @@ def apply(config: dict[str, Any], tag: str, api_key: str, dry_run: bool) -> int:
         tag: The image tag to deploy.
         api_key: RunPod API key.
         dry_run: Print the payloads without calling the API.
+        bounce: After an update, force workers off the previous release.
 
     Returns:
         A process exit code.
     """
+    workers = config.get("workers") or {}
     tmpl = template_body(config, tag)
 
     if dry_run:
@@ -276,6 +302,8 @@ def apply(config: dict[str, Any], tag: str, api_key: str, dry_run: bool) -> int:
         patch = {k: v for k, v in body.items() if k not in {"id", "computeType"}}
         _request("PATCH", f"/endpoints/{endpoint_id}", api_key, patch)
         print(f"endpoint updated  {config['name']}  {endpoint_id}")
+        if bounce:
+            _bounce_workers(endpoint_id, int(workers.get("max", 1)), api_key)
     else:
         created = _request("POST", "/endpoints", api_key, body)
         endpoint_id = str(created["id"])
@@ -297,6 +325,11 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--tag", required=True, help="immutable image tag")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--no-bounce",
+        action="store_true",
+        help="skip the worker bounce after an update (stale FlashBoot workers keep serving the old image)",
+    )
     args = parser.parse_args()
 
     if args.tag == "latest" or args.tag.endswith(":latest"):
@@ -309,7 +342,13 @@ def main() -> int:
         return 2
 
     try:
-        return apply(load_config(args.config), args.tag, api_key, args.dry_run)
+        return apply(
+            load_config(args.config),
+            args.tag,
+            api_key,
+            args.dry_run,
+            bounce=not args.no_bounce,
+        )
     except ApiError as exc:
         print(str(exc), file=sys.stderr)
         return 1

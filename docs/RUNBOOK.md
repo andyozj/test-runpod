@@ -62,6 +62,8 @@ python scripts/apply_endpoint.py --config deploy/endpoints/cached.yaml \
     --tag $TAG-slim
 ```
 
+On updates the script bounces `workersMax` 0 → configured automatically, because FlashBoot workers do not re-pull on release (diagnosis table below). Expect ~30s of `409` on submissions during the bounce; `--no-bounce` skips it when stale workers are acceptable.
+
 Then, on that endpoint in the console:
 
 1. **Model** = `black-forest-labs/FLUX.1-dev`
