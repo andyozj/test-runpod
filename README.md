@@ -12,7 +12,7 @@ One deliverable and two spikes. The spikes sit beside the brief, not inside it: 
 
 | Tier | Where | What it is |
 |---|---|---|
-| **The deliverable** | [`worker/`](worker/), [`worker/Dockerfile`](worker/Dockerfile), [`deploy/endpoints/`](deploy/endpoints/), [`scripts/apply_endpoint.py`](scripts/apply_endpoint.py), [`docs/RUNBOOK.md`](docs/RUNBOOK.md), [`samples/`](samples/), [`client/generate.py`](client/generate.py) | The brief: handler, image, deployed endpoint, demo client, operations. Package details in [`worker/README.md`](worker/README.md) |
+| **The deliverable** | [`worker/`](worker/), [`worker/Dockerfile`](worker/Dockerfile), [`deploy/endpoints/`](deploy/endpoints/), [`scripts/apply_endpoint.py`](scripts/apply_endpoint.py), [`docs/RUNBOOK.md`](docs/RUNBOOK.md), [`samples/`](samples/), [`client/generate.py`](client/generate.py) | The brief: handler, image, deployed endpoint, demo client, operations. Request lifecycle and package details in [`worker/README.md`](worker/README.md) |
 | **Spike: benchmarks** | [`benchmarks/`](benchmarks/), [`BENCHMARKS.md`](BENCHMARKS.md) | What the endpoint actually does under one variable at a time: steps, resolution, payload, concurrency, cold starts. Its rendered report backs every number quoted below. [`benchmarks/README.md`](benchmarks/README.md) |
 | **Spike: gateway** | [`gateway/`](gateway/) | A production-shaped API tier in front of the endpoint: auth, idempotency, job store, reconciler. Endpoints, and the fence, in [`gateway/README.md`](gateway/README.md) |
 
