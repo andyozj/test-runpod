@@ -9,6 +9,9 @@ dependencies = [
     "structlog>=24.4",
     "pillow>=10.4",
     "runpod>=1.7",
+    # fetch_weights.py runs inside the built image, which is installed
+    # --no-dev — this must not live only in the dev dependency group.
+    "huggingface-hub>=0.25",
 ]
 
 # Installed only in the image. Excluded from the dev environment so the test
@@ -30,7 +33,6 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.7",
     "mypy>=1.11",
-    "huggingface-hub>=0.25",
 ]
 
 [build-system]

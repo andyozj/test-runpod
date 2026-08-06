@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 
+import pytest
 from PIL import Image
 
 from tests.conftest import (
@@ -65,12 +66,25 @@ def test_effective_dimensions_are_echoed(
     assert pipeline.calls[0]["width"] == 992
 
 
-def test_absent_seed_is_generated_and_echoed(
-    pipeline: FakePipeline, settings: Settings
+def test_absent_seed_is_generated_and_reaches_the_pipeline(
+    pipeline: FakePipeline, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from worker import inference as inference_module
+
+    seen_seeds: list[int] = []
+    original_generator = inference_module._generator
+
+    def _recording_generator(seed: int) -> object:
+        seen_seeds.append(seed)
+        return original_generator(seed)
+
+    monkeypatch.setattr(inference_module, "_generator", _recording_generator)
+
     output = _run({"prompt": "x"}, pipeline, settings)
 
+    assert seen_seeds == [output["seed"]]
     assert isinstance(output["seed"], int)
+    assert 0 <= output["seed"] < inference_module.MAX_SEED
 
 
 def test_progress_callback_fires_once_per_step(
@@ -161,6 +175,35 @@ def test_image_guardrail_receives_the_generated_bytes(
     _run({"prompt": "x"}, pipeline, settings)
 
     assert len(recorder.seen) == 1
+
+
+def test_a_crashing_prompt_guardrail_fails_closed_as_inference_failed(
+    pipeline: FakePipeline, settings: Settings
+) -> None:
+    handler_module.set_guardrails(
+        prompt=RecordingGuardrail(raises=RuntimeError("boom"))
+    )
+
+    output = _run({"prompt": "x"}, pipeline, settings)
+
+    # The guardrail crashed, the prompt didn't violate policy: INFERENCE_FAILED,
+    # not PROMPT_BLOCKED, so the gateway doesn't log a guardrail outage as a
+    # content-policy block.
+    assert _envelope(output)["code"] == "INFERENCE_FAILED"  # type: ignore[index]
+    assert pipeline.calls == []
+
+
+def test_a_crashing_image_guardrail_fails_closed_as_inference_failed(
+    pipeline: FakePipeline, settings: Settings
+) -> None:
+    handler_module.set_guardrails(
+        image=RecordingImageGuardrail(raises=RuntimeError("boom"))
+    )
+
+    output = _run({"prompt": "x"}, pipeline, settings)
+
+    assert _envelope(output)["code"] == "INFERENCE_FAILED"  # type: ignore[index]
+    assert "image_base64" not in output
 
 
 def test_invalid_prompt_is_rejected_before_the_pipeline(

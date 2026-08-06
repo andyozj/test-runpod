@@ -118,7 +118,9 @@ def generate(
     )
 
 
-def _generator(seed: int) -> Any | None:
+def _generator(
+    seed: int,
+) -> Any | None:  # torch.Generator; torch is import-guarded below
     """Return a seeded CUDA generator, or None when torch is unavailable.
 
     Args:

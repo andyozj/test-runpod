@@ -17,29 +17,38 @@ from typing import Literal, Protocol, runtime_checkable
 from worker.contracts import contract_path
 
 _CONTRACT = contract_path("blocklist.json")
+_NORMALISATION_CONTRACT = contract_path("normalisation.json")
 
 Action = Literal["allow", "block"]
 
-# Characters used to break up a term without changing how it reads: zero-width
-# spaces, joiners, and the soft hyphen.
-_INVISIBLE = re.compile(r"[­​‌‍⁠﻿]")
-_SEPARATOR_CHARS = r"[\s\-_.*+~/\\|]"
-_SEPARATORS = re.compile(rf"{_SEPARATOR_CHARS}+")
-_SEPARATOR_RUN = rf"{_SEPARATOR_CHARS}*"
 
-_CONFUSABLES = str.maketrans(
-    {
-        "0": "o",
-        "1": "i",
-        "3": "e",
-        "4": "a",
-        "5": "s",
-        "7": "t",
-        "@": "a",
-        "$": "s",
-        "!": "i",
-    }
-)
+def _load_normalisation(
+    path: Path | None = None,
+) -> tuple[re.Pattern[str], re.Pattern[str], str, dict[int, str]]:
+    """Build the normalisation tables from the shared contract.
+
+    Args:
+        path: Override for the contract location. Tests only.
+
+    Returns:
+        A tuple of (invisible-char pattern, one-or-more-separators pattern,
+        the separator character class body used to build `term_pattern`'s
+        zero-or-more form, and the confusable translation table).
+    """
+    data = json.loads((path or _NORMALISATION_CONTRACT).read_text())
+    invisible = re.compile(
+        "[" + "".join(re.escape(ch) for ch in data["invisible_chars"]) + "]"
+    )
+    separator_body = "".join(re.escape(ch) for ch in data["separator_chars"])
+    if data["separator_includes_unicode_whitespace"]:
+        separator_body = r"\s" + separator_body
+    separators = re.compile(rf"[{separator_body}]+")
+    confusables = str.maketrans(data["confusables"])
+    return invisible, separators, separator_body, confusables
+
+
+_INVISIBLE, _SEPARATORS, _SEPARATOR_BODY, _CONFUSABLES = _load_normalisation()
+_SEPARATOR_RUN = rf"[{_SEPARATOR_BODY}]*"
 
 
 @dataclass(frozen=True)

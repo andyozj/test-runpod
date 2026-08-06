@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "note": "Text normalisation tables shared by the worker and gateway blocklist guardrails. See docs/specs/04-guardrails.md.",
+  "invisible_chars": ["­", "​", "‌", "‍", "⁠", "﻿"],
+  "separator_chars": ["-", "_", ".", "*", "+", "~", "/", "\\", "|"],
+  "separator_includes_unicode_whitespace": true,
+  "confusables": {
+    "0": "o",
+    "1": "i",
+    "3": "e",
+    "4": "a",
+    "5": "s",
+    "7": "t",
+    "@": "a",
+    "$": "s",
+    "!": "i"
+  }
+}
