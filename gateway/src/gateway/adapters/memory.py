@@ -1,6 +1,6 @@
 """In-memory job repository.
 
-Postgres is the specified production store (docs/specs/02-gateway-core.md);
+Postgres is the specified production store;
 this implements the same protocol so the service, the API and the reconciler
 are fully exercised without a database. Swapping it is one binding in the
 composition root.

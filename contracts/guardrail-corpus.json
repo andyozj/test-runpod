@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Shared prompt-guardrail corpus run by both tiers against contracts/blocklist.json and contracts/normalisation.json. See docs/specs/04-guardrails.md.",
+  "note": "Shared prompt-guardrail corpus run by both tiers against contracts/blocklist.json and contracts/normalisation.json.",
   "cases": [
     {"input": "a photo of gore", "expect_blocked": true, "note": "plain blocklist term"},
     {"input": "mutilation of the statue", "expect_blocked": true, "note": "plain blocklist term"},

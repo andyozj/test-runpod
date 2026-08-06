@@ -5,9 +5,8 @@ Written before the endpoint exists so deploy-day verification is one command:
     export RUNPOD_API_KEY=... RUNPOD_ENDPOINT_ID=...
     cd worker && uv run pytest -m gpu tests/e2e -v
 
-Each test maps to a case in docs/specs/07-testing.md. Cases owned by the
-gateway (idempotency replay) or requiring orchestration (cold-start
-decomposition) live elsewhere: the benchmark harness owns timing.
+Cases owned by the gateway (idempotency replay) or requiring orchestration
+(cold-start decomposition) live elsewhere: the benchmark harness owns timing.
 """
 
 from __future__ import annotations

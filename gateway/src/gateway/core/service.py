@@ -48,7 +48,7 @@ def _retry_after_s(wait_s: float) -> int:
 
     The spread is not decoration: an exact wait returns every shed caller at
     the same instant, converting one queue spike into a synchronised second
-    one (docs/specs/02-gateway-core.md).
+    one.
 
     Args:
         wait_s: The estimated wait in seconds.

@@ -77,7 +77,7 @@ source = ["src/gateway"]
 # core/ must not import outward. A stray `from fastapi import HTTPException`
 # in the domain passes ruff, mypy and every test while welding the rules to one
 # transport; the cost surfaces only when the second facade turns out to be a
-# rewrite. See docs/specs/02-gateway-core.md.
+# rewrite.
 [tool.importlinter]
 root_package = "gateway"
 include_external_packages = true

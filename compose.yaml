@@ -3,7 +3,7 @@
 #   cp .env.example .env    # set RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID
 #   docker compose up
 #
-# Postgres is the specified production store (docs/specs/02-gateway-core.md).
+# Postgres is the specified production store, unimplemented.
 # The gateway currently uses an in-memory repository behind the same protocol,
 # so no database service is started — adding one without an implementation
 # using it would be scenery, not infrastructure.

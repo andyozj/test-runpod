@@ -1,7 +1,7 @@
 """Content guardrails for prompts and generated images.
 
 `diffusers` FLUX pipelines ship no `safety_checker`, so whatever is not
-implemented here does not exist. See docs/specs/04-guardrails.md.
+implemented here does not exist.
 """
 
 from __future__ import annotations

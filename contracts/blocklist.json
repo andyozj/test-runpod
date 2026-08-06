@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Minimal, printable category terms. Production lists load from configuration and merge over these. See docs/specs/04-guardrails.md.",
+  "note": "Minimal, printable category terms. Production lists load from configuration and merge over these.",
   "categories": {
     "csam": ["csam"],
     "graphic_violence": ["gore", "mutilation", "beheading"],
