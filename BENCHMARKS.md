@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured 2026-08-07 against endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-72e537d-slim`, GPU RTX PRO 6000 MIG 48GB (requested: NVIDIA L40S; platform substituted within the 48GB tier), model per response `model_version`. Rate $1.75/hr (2026-08-05, re-verify before quoting). Raw data: `benchmarks/raw.jsonl` (156 records). Methodology: fixed seed, one variable at a time, N stated per cell.
+Measured 2026-08-06 against endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-72e537d-slim`, GPU RTX PRO 6000 MIG 48GB (requested: NVIDIA L40S; platform substituted within the 48GB tier), model per response `model_version`. Rate $1.75/hr (2026-08-05, re-verify before quoting). Raw data: `benchmarks/raw.jsonl` (156 records). Methodology: fixed seed, one variable at a time, N stated per cell.
 
 **Read the N column before any percentile.** N is 3-10 per cell: sequential probes, no sustained load. Enough to rank options (step count, GPU tier, image format); not literal latency guarantees. SLO-grade p50/p95 needs a proper load test (e.g. Locust) at production concurrency, which this harness does not do.
 

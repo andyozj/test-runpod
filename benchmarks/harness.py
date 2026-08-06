@@ -689,10 +689,16 @@ def render(cfg: dict[str, Any], tag: str) -> str:
     rate = cfg["rate_usd_hr"]
     comparisons, cost_28 = _comparisons_section(cfg, records, rate)
 
+    # The measurement date lives in the data; stamping render time would let a
+    # re-render silently postdate the numbers.
+    measured = max(
+        (str(r["recorded_at"])[:10] for r in records if r.get("recorded_at")),
+        default=time.strftime("%Y-%m-%d"),
+    )
     lines = [
         "# Benchmarks",
         "",
-        f"Measured {time.strftime('%Y-%m-%d')} against endpoint `<endpoint-id: supplied in the submission email>`, "
+        f"Measured {measured} against endpoint `<endpoint-id: supplied in the submission email>`, "
         f"image `{tag}`, GPU {cfg['gpu']}, model per response `model_version`. "
         f"Rate ${rate}/hr ({cfg['rate_date']}, re-verify before quoting). "
         f"Raw data: `benchmarks/raw.jsonl` ({len(records)} records). "
