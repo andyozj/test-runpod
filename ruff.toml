@@ -1,18 +1,28 @@
-# Lints the CLI tools, which sit outside both packages: client/ and scripts/.
-# Each package has its own config in its pyproject.toml.
+# Lints the CLI tools, which sit outside both packages: client/, scripts/,
+# benchmarks/. Each package has its own config in its pyproject.toml.
 
 line-length = 88
 target-version = "py311"
-include = ["client/**/*.py", "scripts/**/*.py"]
+include = ["client/**/*.py", "scripts/**/*.py", "benchmarks/**/*.py"]
 
 [lint]
-select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "D", "S", "C90", "PLR0913"]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "D", "S", "C90",
+    "PLR0913", "PLR0915", "PLR2004",
+]
 # T20 is deliberately absent: these are command-line tools, and stdout is the
 # interface. Everything else in STANDARDS.md applies.
 ignore = ["E501", "D107"]
 
+[lint.per-file-ignores]
+"scripts/tests/**" = ["D", "S101", "PLR2004"]
+
 [lint.mccabe]
 max-complexity = 12
+
+[lint.pylint]
+max-args = 5
+max-statements = 50
 
 [lint.pydocstyle]
 convention = "google"
