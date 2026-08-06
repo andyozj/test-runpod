@@ -4,6 +4,12 @@
 what happens at runtime, every decision and why, and exactly what remains.
 Companion to the short version in `where-we-are.md`.
 
+> **Historical, as written on 2026-08-05.** Two things below were superseded:
+> the network volume was dropped (the baked image is the fallback), and the
+> revision pin was removed — `contracts/model-revision.txt` no longer exists
+> and the worker discovers and reports the staged revision instead. Current
+> state is `README.md`, `docs/RUNBOOK.md`, `BENCHMARKS.md`.
+
 ---
 
 ## 1. The assignment

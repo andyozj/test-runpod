@@ -1,12 +1,26 @@
 # Where we are — plain-English summary
 
-2026-08-05, evening. Everything below is tested unless marked otherwise.
-
-> **2026-08-06 update:** deployed. Image pushed (`0.1.0-44c9643-slim`, 2.9GB),
-> endpoint `<endpoint-id — supplied in the submission email>` created via the REST API, cached-model staging in
-> progress. Deploy-day findings live in `docs/RUNBOOK.md` (GHCR classic PAT,
-> package visibility, console-only Model field, the all-unhealthy signature).
-> First verified generation pending; then benchmarks.
+> **Historical. Written 2026-08-05, evening; kept as a record of what was known
+> then, not as current documentation.** For current state read `README.md`,
+> `docs/RUNBOOK.md` and `BENCHMARKS.md`.
+>
+> Superseded since:
+>
+> - **Deployed.** Image `0.1.0-b8d1f76-slim` on the cached-models endpoint,
+>   deployed through `.github/workflows/deploy.yml`. 7/7 e2e green.
+> - **Benchmarked.** 156 records in `benchmarks/raw.jsonl`, rendered to
+>   `BENCHMARKS.md`.
+> - **The network volume was dropped, not kept as a fallback.** The fallback is
+>   the baked image, which is a build target (`make build-baked`). See
+>   README *Weight delivery*.
+> - **The revision pin was removed.** `contracts/model-revision.txt` no longer
+>   exists. The worker discovers the staged revision (`refs/main`, or the only
+>   snapshot) and reports it on every result; it refuses to start only when
+>   several snapshots coexist with no ref naming the staged one.
+> - Deploy-day findings live in `docs/RUNBOOK.md` (GHCR classic PAT, package
+>   visibility, console-only Model field, the all-unhealthy signature).
+>
+> Everything below is as written on 2026-08-05.
 
 ## The goal
 
