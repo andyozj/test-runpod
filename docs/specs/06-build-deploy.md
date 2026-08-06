@@ -119,7 +119,7 @@ Procedure lives in `RUNBOOK.md`. Summary: provision pod → clone → `docker bu
 
 ## Deploy and rollback
 
-Deploy: build and push on the Pod → run the deploy workflow with the new tag → `saveEndpoint` updates the endpoint → workers pick it up on next cold start; FlashBoot workers drain naturally.
+Deploy: build and push locally → `apply_endpoint.py` with the new tag → **bounce `workersMax` to 0 and back**. The bounce is not optional: FlashBoot workers do not drain on release — a resident worker kept serving the previous image across a template update and multiple jobs (observed 2026-08-06; the docs are silent on release behaviour). An earlier revision of this section assumed natural drain; it was wrong.
 
 Rollback: the same workflow with the previous tag. This works only because tags are immutable — with `latest`, the previous image no longer exists to roll back to.
 
