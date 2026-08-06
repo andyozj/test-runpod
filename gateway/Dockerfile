@@ -1,8 +1,13 @@
 FROM python:3.11-slim
 
+# Reported by /health. Baked at build time because the running container has no
+# git and no package metadata to derive it from.
+ARG VERSION=0.1.0
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app/src
+    PYTHONPATH=/app/src \
+    VERSION=${VERSION}
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
