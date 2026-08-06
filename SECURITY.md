@@ -27,7 +27,7 @@ Two checkpoints, one shared contract. Terms come from [`contracts/blocklist.json
 
 - **Gateway:** the prompt check runs before the insert (`core/service.py`), so a blocked prompt never becomes a job.
 - **Worker:** `_guard_prompt` runs before any GPU time; `_guard_image` runs on the decoded bytes before the image is returned or uploaded (`worker/src/worker/handler.py`).
-- **A guardrail that raises still stops the request** — fail closed — but is reported as `INFERENCE_FAILED`, not `PROMPT_BLOCKED`/`IMAGE_BLOCKED`. A crash is an infra fault, retryable as-is; a block is a policy verdict, retryable only after the prompt changes. Conflating them would misreport a guardrail outage as a policy spike.
+- **A guardrail that raises still stops the request** — fail closed — but is reported as `INFERENCE_FAILED`, not `PROMPT_BLOCKED`/`IMAGE_BLOCKED`: a crash is an infra fault, a block a policy verdict (rationale in [`docs/DESIGN.md`](docs/DESIGN.md) §11).
 - The image hook is bound to `NoopImageGuardrail`: the extension point is exercised with real bytes at the right moment, but **no image classifier is running**. It blocks nothing today.
 
 `diffusers` FLUX pipelines ship no `safety_checker`. Whatever is not listed above does not exist.

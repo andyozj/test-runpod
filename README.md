@@ -193,7 +193,7 @@ make build-slim       # tags ghcr.io/andyozj/flux-worker:<version>-<sha>-slim
 docker push ghcr.io/andyozj/flux-worker:$(make -s print-tag)-slim
 ```
 
-Versioning is tag-driven: the most recent `v*` git tag names the version, the commit SHA makes the image tag immutable, and `make print-tag` shows the result. Override `IMAGE`/`TAG` on the command line for another registry. `--platform linux/amd64` is set in the Makefile; without it an arm64 build produces an image RunPod cannot run, and the failure presents as a worker that starts and immediately dies.
+Versioning is tag-driven: the most recent `v*` git tag names the version, the commit SHA makes the image tag immutable, and `make print-tag` shows the result. Override `IMAGE`/`TAG` on the command line for another registry. `--platform linux/amd64` is set in the Makefile; without it an arm64 build produces an image RunPod cannot run (symptoms in the [RUNBOOK](docs/RUNBOOK.md#diagnosis)).
 
 CD: `.github/workflows/deploy.yml` runs CI, builds, pushes and applies from one button (rollback = re-run with the previous tag); a `v*` tag push publishes the image without deploying. Details in the [RUNBOOK](docs/RUNBOOK.md). When something is broken, start at its [Diagnosis](docs/RUNBOOK.md#diagnosis) table: symptom, likely cause, the check that settles it, ordered by how often each is actually the cause.
 
@@ -217,7 +217,7 @@ The production decision rule:
 
 A deliberate deviation, stated rather than hidden. Staging pulls the whole repo, so the ~24GB of duplicate single-file weights come along: unbilled, and not our disk.
 
-**For this model, a network volume was tried and dropped.** FLUX.1-dev is on HF, so the volume competed with cached models and lost: it costs a datacenter pin that narrows the GPU pool exactly when scaling up under load (the moment it was meant to help), plus a per-GB bill and a population step. It is not kept as a *standing* fallback: a volume is only a fallback if it is *already populated*, and populating one costs everything removing it avoided. But no fallback here is exercised; if cached staging ever breaks, populating a volume is the recovery path that is known to work, while the baked push is not (rule 3). For weights that are not on HF, rule 2 above applies and the volume stops being a choice.
+**For this model, a network volume was tried and dropped.** FLUX.1-dev is on HF, so the volume competed with cached models and lost: it costs a datacenter pin that narrows the GPU pool exactly when scaling up under load, plus a per-GB bill and a population step. It is not kept as a *standing* fallback: a volume is only a fallback if it is *already populated*. But no fallback here is exercised; if cached staging ever breaks, populating a volume is the recovery path that is known to work, while the baked push is not (rule 3). For weights that are not on HF, rule 2 above applies and the volume stops being a choice.
 
 `weights.resolve()` tries the configured path, then the model cache, so a deployment picks a mechanism by configuration alone. The staged snapshot is identified through the cache's `refs/main`, and the revision it actually holds is reported on every result; the worker refuses to start only when several snapshots coexist with no ref naming the staged one. RunPod's own example picks an arbitrary snapshot in that case, which would misattribute every image.
 

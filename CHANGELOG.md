@@ -63,12 +63,12 @@ First live deployment. Endpoint created from image `0.1.0-44c9643-slim`.
 
 ### Changed
 
-- Weight delivery moved from a network volume to RunPod cached models; the volume was tried and dropped on a list-price cost analysis — datacenter pin, per-GB storage bill, one-time population step — never populated or deployed, and not kept as a fallback.
+- Weight delivery moved from a network volume to RunPod cached models; the volume was tried and dropped on a list-price cost analysis, never populated or deployed ([`docs/DESIGN.md`](docs/DESIGN.md) §1).
 - Redundant API surface deleted in favour of RunPod's own operations.
 
 ### Fixed
 
-- Error envelopes are JSON-encoded into the platform's `error` string; a dict returned there is silently dropped, leaving the caller a completed job with no output.
+- Error envelopes are JSON-encoded into the platform's `error` string; a dict returned there is silently dropped.
 - Endpoint `PATCH` bodies exclude create-only keys; L40S only.
 - Contract paths resolve by search rather than a fixed parent depth.
 

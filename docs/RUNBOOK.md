@@ -22,7 +22,7 @@ What this runbook does not cover, so nobody looks for it at 3am:
 - **No automatic rollback.** `smoke-test` in `deploy.yml` runs *after* `deploy` has already mutated the endpoint. A red smoke test is detection; the rollback is a human re-running the workflow with the previous tag from the record above.
 - **One endpoint, in place.** `deploy/endpoints/cached.yaml` is the deployed config; `baked.yaml` is documented, not deployed. No blue/green, no canary, no traffic split — an apply replaces the running configuration and bounces the workers.
 - **The gateway is not in this deploy path.** `deploy.yml` deploys the worker endpoint only. The gateway runs from `compose.yaml` locally; nothing here deploys it anywhere.
-- **No alerting.** Failures are found by running the checks below. Cold-start failures emit nothing at all (see [What is visible from where](#what-is-visible-from-where)); only a synthetic probe that never completes detects them.
+- **No alerting.** Failures are found by running the checks below. Cold-start failures emit nothing at all (see [What is visible from where](#what-is-visible-from-where)).
 - **Secrets are rotated by hand.** The complete list of what exists and where it is read: `.env.example` (every variable either settings module reads, plus build-time and compose passthroughs), and the two GitHub repo secrets `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID`. Teardown revocation steps are at the bottom.
 
 ## Prerequisites
@@ -40,7 +40,7 @@ What this runbook does not cover, so nobody looks for it at 3am:
 
 ## Build and push
 
-**Build locally.** The image is ~2.9GB: no weights, and no CUDA base image because the torch wheel carries its own libraries. No Pod in this procedure: the baked variant would need one for its 45GB, the slim build does not.
+**Build locally.** The image is ~2.9GB: no weights, no CUDA base image ([`DESIGN.md`](DESIGN.md) §2). No Pod in this procedure: the baked variant would need one for its 45GB, the slim build does not.
 
 **Versioning:** the most recent `v*` git tag names the version; the commit SHA makes the image tag immutable. `make build-slim` derives both: `v0.1.0` at `abc1234` builds `0.1.0-abc1234-slim`. Bump by tagging: `git tag -a v0.2.0 -m "..." && git push --tags`.
 
@@ -144,15 +144,12 @@ Job order: `checks` → `build-push` → `verify-tag` → `deploy` → `smoke-te
   tag-push entry point too. A `v*` push cannot publish an image that failed CI.
 - `verify-tag` runs `docker manifest inspect` on the tag about to be deployed,
   whether it came from `build-push` or was typed into the `tag` input, and
-  gates `deploy`. It converts "rolled back to a tag that was never pushed"
-  from a broken endpoint into a failed workflow step.
+  gates `deploy`.
 - `deploy` runs in the `runpod` environment, so it waits on that environment's
   approval before touching anything.
 - `smoke-test` runs `pytest -m gpu tests/e2e` against the live endpoint after
-  the apply. **This is detection, not prevention:** `deploy` has already
-  mutated the endpoint by the time it runs, so a red smoke test means roll
-  back by hand — re-run the workflow with the previous tag from the deploy
-  record above.
+  the apply. Detection, not prevention: a red result means a manual rollback
+  ([Limits](#limits)).
 
 One-time setup: repo secrets `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID`, the
 `runpod` environment, and the GHCR package made public after the first push
@@ -160,10 +157,7 @@ One-time setup: repo secrets `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID`, the
 to be set once per endpoint by hand.
 
 `smoke-test` sets `CI=true`, under which a missing `RUNPOD_ENDPOINT_ID` is a
-hard `pytest.fail` rather than a skip — deliberately, so an unset secret cannot
-let a required gate pass by testing nothing. Both secrets are configured: the
-2026-08-06 `0.1.0-b8d1f76-slim` deploy went through this workflow and its
-smoke test ran 7/7 green.
+hard `pytest.fail` rather than a skip ([`worker/README.md`](../worker/README.md#develop)).
 
 ### Warm it before demonstrating
 
@@ -173,7 +167,7 @@ curl -s -X POST "https://api.runpod.ai/v2/$ENDPOINT_ID/runsync" \
   -d '{"input": {"prompt": "warmup", "num_inference_steps": 4}}' > /dev/null
 ```
 
-A post-idle worker resumes in ~16s p50, but a true cold start on a fresh host measured 89.9s p50, 518.1s max (N=3 per phase, `BENCHMARKS.md`; indicative, not a guarantee). `/runsync` holds the connection through neither and may time out, which would make the demo look broken on the first call. Setting **active workers to 1** for the demo window removes cold starts entirely and bills continuously; set it back to 0 afterwards.
+A post-idle worker resumes in ~16s p50, but a true cold start on a fresh host measured 89.9s p50, 518.1s max (`BENCHMARKS.md`). `/runsync` holds the connection through neither and may time out, which would make the demo look broken on the first call. Setting **active workers to 1** for the demo window removes cold starts entirely and bills continuously; set it back to 0 afterwards.
 
 ## Verify
 
@@ -219,9 +213,6 @@ passed against `localhost:8000` with the compose dev key:
   different body → 409 `IDEMPOTENCY_CONFLICT`; unknown job id → 404
 - real 512×512 4-step job through the live endpoint → `COMPLETED` PNG,
   1.4s inference, staged model revision reported
-
-The `Idempotency-Replayed` header arrives lowercase on the wire (Starlette
-lowercases all response headers): compare case-insensitively.
 
 ## Rollback
 

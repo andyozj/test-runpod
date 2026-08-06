@@ -226,7 +226,7 @@ logger.info(
 
 ### Serverless constraint
 
-RunPod serverless supports no sidecars. There is no log shipper, no metrics agent. The handler emits to stdout and that is the entire observability surface from inside the container. Anything not emitted there is only observable via the RunPod API from outside. Design accordingly.
+RunPod serverless supports no sidecars: the handler emits to stdout and that is the entire observability surface from inside the container. Anything not emitted there is only observable via the RunPod API from outside. Design accordingly.
 
 ## 9. Testing
 
@@ -242,7 +242,7 @@ Naming: `test_<unit>_<scenario>_<expected_result>`. Arrange-Act-Assert. `pytest.
 
 "External network" is the operative word. Integration tests may start local containers (Postgres via testcontainers is expected) because that is a local dependency CI can provide. What they may not do is reach HuggingFace, the RunPod API, or any other third party: those make the suite slow, flaky, and dependent on someone else's uptime and on credentials CI should not hold.
 
-The GPU half is a design constraint, not a testing preference: it forces the pipeline behind a lazily-initialised, injectable accessor rather than a module-level global. A `handler.py` that cannot be imported on a laptop is a `handler.py` that cannot be tested, and the fix is architectural.
+The GPU half is a design constraint, not a testing preference: it forces the pipeline behind a lazily-initialised, injectable accessor rather than a module-level global ([`docs/DESIGN.md`](docs/DESIGN.md) §16).
 
 GPU-dependent checks live in `tests/e2e/`, marked `@pytest.mark.gpu`, deselected by default, run manually against a live endpoint.
 
@@ -377,7 +377,7 @@ Plus: docs updated in the same commit, no new `Any` without justification, no se
 
 `--cov-fail-under=80` measures the whole package, which is stricter than the "80% of new code" in §9 and equivalent to it in a new repository. Keep the whole-package gate; if it ever becomes the binding constraint, that is a signal about the untested code already there, not a reason to relax it. The 100% requirement on validation and the error-code contract is enforced in review, not by the tool.
 
-`ci.yml` runs lint, types, doctests and non-GPU tests only; it builds no image. `deploy.yml` builds and pushes the **slim** worker image (2.92GB) on a standard GitHub runner, then applies the endpoint config and runs the e2e suite against it. The **baked** image is still never built in CI: ~45GB exceeds the ~14GB of runner disk, so it stays `make build-baked` on a machine that can hold it. The runbook documents both.
+`ci.yml` runs lint, types, doctests and non-GPU tests only; it builds no image. `deploy.yml` builds and pushes the **slim** worker image (2.92GB) on a standard GitHub runner, then applies the endpoint config and runs the e2e suite against it. The **baked** image is still never built in CI: ~45GB exceeds the ~14GB of runner disk, so it stays `make build-baked` on a machine that can hold it.
 
 ## 13. Commits
 

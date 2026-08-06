@@ -1,10 +1,8 @@
 # Benchmarks (spike)
 
-Measurement harness for the deployed endpoint, one variable at a time: steps, resolution, payload, concurrency, cold starts, queueing, FlashBoot. Beyond the brief (the endpoint is callable without it), but the numbers quoted in the root README come from its output. Methodology: fixed seed, one variable at a time, N stated per cell; stated in [`BENCHMARKS.md`](../BENCHMARKS.md).
+Measurement harness for the deployed endpoint: steps, resolution, payload, concurrency, cold starts, queueing, FlashBoot. Beyond the brief (the endpoint is callable without it), but the numbers quoted in the root README come from its output. Methodology (fixed seed, one variable at a time, N stated per cell) and the N=3-10 caveat (ranks options, not latency guarantees) are in [`BENCHMARKS.md`](../BENCHMARKS.md)'s header.
 
-Intent: curiosity. The endpoint was live and the obvious questions had no measured answers: what a step costs, when cold start hurts, whether the 48GB tier beats an A100 on $/image. The harness answers them with small fixed-seed samples. It characterizes the endpoint; it does not load-test it.
-
-Every table states N per row (3-10 per cell, sequential probes). Percentiles at that N rank options; they are not latency guarantees. SLO-grade p50/p95 needs a proper load test (e.g. Locust) at production concurrency, which has not been run.
+Intent: curiosity. The endpoint was live and the obvious questions had no measured answers: what a step costs, when cold start hurts, whether the 48GB tier beats an A100 on $/image. It characterizes the endpoint; it does not load-test it.
 
 | File | What |
 |---|---|

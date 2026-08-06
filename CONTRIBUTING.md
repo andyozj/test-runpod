@@ -86,6 +86,6 @@ ci: pin third-party actions to commit SHAs, wire tools mypy and tests
 test(scripts): add apply_endpoint.py pure-function tests
 ```
 
-State what changed and why. No AI attribution of any kind — no `Co-Authored-By`, no session URL, no "Generated with" (`STANDARDS.md` §13).
+State what changed and why. No AI attribution of any kind (`STANDARDS.md` §13).
 
 Docs change in the same commit as the code they describe.
