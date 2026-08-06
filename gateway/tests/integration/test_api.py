@@ -84,6 +84,22 @@ def test_idempotency_replay_returns_200_and_the_original(client: TestClient) -> 
     assert second.json()["job_id"] == first.json()["job_id"]
 
 
+def test_replay_is_detected_even_on_the_original_correlation_id(
+    client: TestClient,
+) -> None:
+    """A client retrying with its own trace id is still a replay."""
+    headers = {
+        **AUTH,
+        "Idempotency-Key": "same-trace",
+        "X-Correlation-ID": "trace-1",
+    }
+    client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=headers)
+    second = client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=headers)
+
+    assert second.status_code == 200
+    assert second.headers["Idempotency-Replayed"] == "true"
+
+
 def test_idempotency_conflict_is_409(client: TestClient) -> None:
     headers = {**AUTH, "Idempotency-Key": "abc"}
     client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=headers)

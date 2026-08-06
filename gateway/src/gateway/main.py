@@ -74,6 +74,8 @@ def build(settings: Settings | None = None) -> FastAPI:
         job_deadline_s=settings.job_deadline_s,
         max_queue_wait_s=settings.max_queue_wait_s,
         avg_job_s=settings.avg_job_s,
+        submit_grace_s=settings.submit_grace_s,
+        health_max_age_s=settings.health_max_age_s,
     )
     reconciler = Reconciler(
         service=service,

@@ -43,6 +43,7 @@ class InMemoryJobRepository:
     retention_s: float = 3600.0
     _jobs: dict[UUID, Job] = field(default_factory=dict)
     _by_key: dict[tuple[str, str], UUID] = field(default_factory=dict)
+    _leases: dict[UUID, datetime] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def create(self, job: Job) -> Job:
@@ -92,6 +93,7 @@ class InMemoryJobRepository:
             return
         for job_id in expired:
             del self._jobs[job_id]
+            self._leases.pop(job_id, None)
         self._by_key = {
             scoped: job_id
             for scoped, job_id in self._by_key.items()
@@ -110,7 +112,11 @@ class InMemoryJobRepository:
         return self._jobs.get(job_id)
 
     async def attach_runpod_id(self, job_id: UUID, runpod_job_id: str) -> Job:
-        """Record the upstream job id.
+        """Record the upstream job id, terminal status included.
+
+        The terminal guard in `_update` deliberately does not apply: a job
+        cancelled while its submit was in flight is terminal here and still
+        running on a GPU, and dropping the id would leave nothing to cancel.
 
         Args:
             job_id: The job to update.
@@ -119,7 +125,13 @@ class InMemoryJobRepository:
         Returns:
             The updated job.
         """
-        return await self._update(job_id, runpod_job_id=runpod_job_id)
+        async with self._lock:
+            job = self._jobs[job_id]
+            updated = job.advanced(
+                runpod_job_id=runpod_job_id, updated_at=self.clock.now()
+            )
+            self._jobs[job_id] = updated
+            return updated
 
     async def mark_in_progress(self, job_id: UUID, progress: Progress | None) -> Job:
         """Advance a job to running, storing progress when reported.
@@ -177,22 +189,58 @@ class InMemoryJobRepository:
             completed_at=self.clock.now(),
         )
 
-    async def claim_unresolved(self, limit: int) -> list[Job]:
-        """Claim non-terminal jobs, oldest first.
+    async def claim_unresolved(
+        self, limit: int, lease_s: float, submit_grace_s: float
+    ) -> list[Job]:
+        """Lease non-terminal jobs, oldest first.
+
+        The lease is the in-memory equivalent of the Postgres implementation's
+        `FOR UPDATE SKIP LOCKED`: a claimed job is invisible to other callers
+        until the lease expires or `release_claim` drops it. Held under the
+        lock, so two concurrent ticks cannot claim the same row.
 
         Oldest-first ordering means that when the backlog exceeds the limit, no
-        job is starved. The Postgres implementation adds `FOR UPDATE SKIP
-        LOCKED` so a second reconciler takes different rows.
+        job is starved.
 
         Args:
             limit: Maximum jobs to claim.
+            lease_s: How long the claim excludes other callers.
+            submit_grace_s: How long an id-less job is left to its submitter.
 
         Returns:
             The claimed jobs.
         """
-        pending = [job for job in self._jobs.values() if not job.status.terminal]
-        pending.sort(key=lambda job: job.updated_at)
-        return pending[:limit]
+        now = self.clock.now()
+        async with self._lock:
+            claimable = [
+                job
+                for job in self._jobs.values()
+                if self._claimable(job, now, submit_grace_s)
+            ]
+            claimable.sort(key=lambda job: job.updated_at)
+            claimed = claimable[:limit]
+            expiry = now + timedelta(seconds=lease_s)
+            for job in claimed:
+                self._leases[job.id] = expiry
+            return claimed
+
+    def _claimable(self, job: Job, now: datetime, submit_grace_s: float) -> bool:
+        if job.status.terminal:
+            return False
+        lease = self._leases.get(job.id)
+        if lease is not None and lease > now:
+            return False
+        grace = timedelta(seconds=submit_grace_s)
+        return not (job.runpod_job_id is None and now - job.created_at < grace)
+
+    async def release_claim(self, job_id: UUID) -> None:
+        """Drop a lease so the next tick can claim the job immediately.
+
+        Args:
+            job_id: The claimed job.
+        """
+        async with self._lock:
+            self._leases.pop(job_id, None)
 
     async def _update(self, job_id: UUID, **changes: object) -> Job:
         async with self._lock:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -30,7 +31,11 @@ class FrozenClock:
 
 @dataclass
 class FakeRunPodClient:
-    """Records submissions; returns scripted statuses."""
+    """Records submissions; returns scripted statuses.
+
+    `submit_gate` holds a submission open so a test can act during the window
+    between the row being written and the upstream id coming back.
+    """
 
     submissions: list[dict[str, Any]] = field(default_factory=list)
     cancelled: list[str] = field(default_factory=list)
@@ -39,11 +44,17 @@ class FakeRunPodClient:
     submit_raises: Exception | None = None
     status_raises: Exception | None = None
     health_raises: Exception | None = None
+    cancel_raises: Exception | None = None
+    submit_gate: asyncio.Event | None = None
+    submit_started: asyncio.Event = field(default_factory=asyncio.Event)
     _counter: int = 0
 
     async def submit(self, payload: dict[str, Any]) -> str:
         if self.submit_raises is not None:
             raise self.submit_raises
+        self.submit_started.set()
+        if self.submit_gate is not None:
+            await self.submit_gate.wait()
         self.submissions.append(payload)
         self._counter += 1
         return f"runpod-{self._counter}"
@@ -54,6 +65,8 @@ class FakeRunPodClient:
         return self.next_status or RunPodJobStatus(status=JobStatus.IN_PROGRESS)
 
     async def cancel(self, runpod_job_id: str) -> None:
+        if self.cancel_raises is not None:
+            raise self.cancel_raises
         self.cancelled.append(runpod_job_id)
 
     async def health(self) -> EndpointHealth:

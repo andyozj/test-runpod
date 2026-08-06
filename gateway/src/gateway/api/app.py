@@ -133,7 +133,7 @@ def build_router(deps: Deps) -> APIRouter:
             idempotency_key=idempotency_key,
         )
         try:
-            job = await deps.service.submit(body.to_params(), ctx)
+            submission = await deps.service.submit(body.to_params(), ctx)
         except UpstreamUnavailableError as exc:
             raise HTTPException(
                 status_code=503,
@@ -164,9 +164,11 @@ def build_router(deps: Deps) -> APIRouter:
                 "Use a new key, or resend the original body.",
             ) from exc
 
+        job = submission.job
         response.headers["X-Correlation-ID"] = ctx.correlation_id
-        if job.context.correlation_id != ctx.correlation_id:
-            # A replay: the stored job carries the original trace.
+        if submission.replayed:
+            # The repository is the only thing that knows: a client retrying
+            # with its own original correlation id is still a replay.
             response.status_code = HTTP_OK
             response.headers["Idempotency-Replayed"] = "true"
             return JobView.of(job)

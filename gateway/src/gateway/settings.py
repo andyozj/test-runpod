@@ -28,6 +28,11 @@ class Settings(BaseSettings):
             normally would be cut off and their results discarded.
         max_queue_wait_s: Estimated wait above which submissions are shed.
         avg_job_s: Expected job duration; replaced by a measured p50.
+        submit_grace_s: How long a job with no upstream id is left alone before
+            the reconciler may adopt it. Must exceed the worst-case submit
+            round trip, or a job still being submitted is submitted twice.
+        health_max_age_s: Age beyond which a queue reading is treated as
+            unknown, so a dead reconciler cannot shed traffic forever.
         version: Reported by the health endpoints.
     """
 
@@ -42,6 +47,8 @@ class Settings(BaseSettings):
     job_deadline_s: int = 600
     max_queue_wait_s: float = 120.0
     avg_job_s: float = 22.0
+    submit_grace_s: float = 30.0
+    health_max_age_s: float = 30.0
     version: str = Field(default="0.1.0")
 
     def key_digests(self) -> dict[str, bytes]:

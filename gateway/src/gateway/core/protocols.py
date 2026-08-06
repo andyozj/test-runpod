@@ -110,7 +110,11 @@ class JobRepository(Protocol):
         ...
 
     async def attach_runpod_id(self, job_id: UUID, runpod_job_id: str) -> Job:
-        """Record the upstream job id.
+        """Record the upstream job id, whatever the job's status.
+
+        Recording an id is not a state transition, so it applies to terminal
+        jobs too: a job cancelled while its submit was in flight still has GPU
+        work running, and the id is the only handle on it.
 
         Args:
             job_id: The job to update.
@@ -161,14 +165,35 @@ class JobRepository(Protocol):
         """
         ...
 
-    async def claim_unresolved(self, limit: int) -> list[Job]:
-        """Claim non-terminal jobs for reconciliation, oldest first.
+    async def claim_unresolved(
+        self, limit: int, lease_s: float, submit_grace_s: float
+    ) -> list[Job]:
+        """Lease non-terminal jobs for reconciliation, oldest first.
+
+        A claim is exclusive for `lease_s`, so a tick overlapping the previous
+        one — or a second reconciler — takes different rows. The lease expires
+        rather than being held, so a caller that dies mid-tick does not strand
+        its jobs.
+
+        A job with no upstream id younger than `submit_grace_s` is not claimed:
+        its row is written before the submit returns, and adopting it inside
+        that window submits the same job twice.
 
         Args:
             limit: Maximum jobs to claim.
+            lease_s: How long the claim excludes other callers.
+            submit_grace_s: How long an id-less job is left to its submitter.
 
         Returns:
             The claimed jobs.
+        """
+        ...
+
+    async def release_claim(self, job_id: UUID) -> None:
+        """Drop a lease so the next tick can claim the job immediately.
+
+        Args:
+            job_id: The claimed job.
         """
         ...
 
