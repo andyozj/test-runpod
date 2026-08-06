@@ -119,7 +119,7 @@ Procedure lives in `RUNBOOK.md`. Summary: provision pod → clone → `docker bu
 
 ## Deploy and rollback
 
-Deploy: build and push locally → `apply_endpoint.py` with the new tag, which bounces `workersMax` 0 → configured automatically. RunPod documents rolling releases for console saves — idle workers replaced immediately, busy ones after their job, **mixed old/new versions during overlap by design** — but a FlashBoot-retained worker resumed on the previous image after an API-driven template PATCH (observed 2026-08-06), a corner the page does not cover. The docs endorse scale-to-zero-and-back for strict version consistency, which is exactly what the script does. An earlier revision assumed natural drain; one rollout falsified it.
+Deploy: build and push locally → `apply_endpoint.py` with the new tag, which bounces `workersMax` 0 → configured automatically. Rolling releases are documented for API and console updates alike: idle workers replaced immediately, busy ones after their job, and old versions serve "until they are replaced" — gradual by design, with no stated bound. The corner the docs do not name: a **FlashBoot-retained** worker (scaled to zero, unbilled) is neither idle nor processing, and one resumed the previous image on its next job (observed 2026-08-06). The bounce is the docs' own remedy for strict consistency; the script just automates it. Two earlier revisions of this paragraph claimed more than the evidence — first "drains naturally", then "the docs are silent" — and each was corrected when tested.
 
 Rollback: the same workflow with the previous tag. This works only because tags are immutable — with `latest`, the previous image no longer exists to roll back to.
 
