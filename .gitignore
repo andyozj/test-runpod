@@ -19,3 +19,8 @@ uv.lock.bak
 **/.DS_Store
 
 .claude/settings.local.json
+
+# local working artifacts, not part of the delivered repo
+docs/notes/
+docs/specs/
+docs/superpowers/
