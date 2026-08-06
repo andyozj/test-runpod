@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from gateway.adapters.memory import InMemoryJobRepository
 from gateway.core.models import (
     ErrorCode,
     GenerationParams,
@@ -18,7 +19,7 @@ from gateway.core.protocols import (
     IdempotencyConflictError,
     RunPodJobStatus,
 )
-from gateway.core.service import JobService, QueueSaturatedError
+from gateway.core.service import ActiveJobLimitError, JobService, QueueSaturatedError
 from tests.conftest import (
     FakeGuardrail,
     FakeRunPodClient,
@@ -424,3 +425,79 @@ async def test_fresh_health_still_sheds(
 
     with pytest.raises(QueueSaturatedError):
         await service.submit(PARAMS, ctx())
+
+
+def _capped_service(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+    cap: int,
+) -> JobService:
+    return JobService(
+        repository=repository,
+        runpod=runpod,
+        guardrail=guardrail,
+        clock=clock,
+        max_active_jobs_per_key=cap,
+    )
+
+
+async def test_active_job_cap_rejects_at_the_limit(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    service = _capped_service(repository, runpod, guardrail, clock, cap=1)
+    await service.submit(PARAMS, ctx())
+
+    with pytest.raises(ActiveJobLimitError) as exc:
+        await service.submit(GenerationParams(prompt="second"), ctx())
+
+    assert exc.value.retry_after_s > 0
+
+
+async def test_active_job_cap_allows_submission_under_the_limit(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    service = _capped_service(repository, runpod, guardrail, clock, cap=2)
+    await service.submit(PARAMS, ctx())
+
+    second = await service.submit(GenerationParams(prompt="second"), ctx())
+
+    assert second.job.status is JobStatus.QUEUED
+
+
+async def test_terminal_jobs_do_not_count_toward_the_active_cap(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    service = _capped_service(repository, runpod, guardrail, clock, cap=1)
+    job = (await service.submit(PARAMS, ctx())).job
+    runpod.next_status = completed()
+    await service.reconcile()
+
+    second = await service.submit(GenerationParams(prompt="second"), ctx())
+
+    assert second.job.status is JobStatus.QUEUED
+    assert job.id != second.job.id
+
+
+async def test_active_job_cap_is_scoped_per_key(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    service = _capped_service(repository, runpod, guardrail, clock, cap=1)
+    await service.submit(PARAMS, ctx(api_key_id="demo"))
+
+    other = await service.submit(PARAMS, ctx(api_key_id="other"))
+
+    assert other.job.status is JobStatus.QUEUED

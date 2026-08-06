@@ -7,10 +7,17 @@ import base64
 import pytest
 from fastapi.testclient import TestClient
 
+from gateway.adapters.memory import InMemoryJobRepository
 from gateway.api.app import Deps, create_app
 from gateway.core.service import JobService
 from gateway.settings import Settings
-from tests.conftest import FakeGuardrail, FakeRunPodClient, Verdict, completed
+from tests.conftest import (
+    FakeGuardrail,
+    FakeRunPodClient,
+    FrozenClock,
+    Verdict,
+    completed,
+)
 
 AUTH = {"Authorization": "Bearer secret-key"}
 
@@ -191,3 +198,27 @@ def test_health_needs_no_credential(client: TestClient) -> None:
 def test_detailed_health_requires_a_credential(client: TestClient) -> None:
     assert client.get("/health/detailed").status_code == 401
     assert client.get("/health/detailed", headers=AUTH).status_code == 200
+
+
+def test_active_job_cap_is_429_with_retry_after(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+    settings: Settings,
+) -> None:
+    capped = JobService(
+        repository=repository,
+        runpod=runpod,
+        guardrail=guardrail,
+        clock=clock,
+        max_active_jobs_per_key=1,
+    )
+    client = TestClient(create_app(Deps(service=capped, settings=settings)))
+    client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH)
+
+    response = client.post("/v1/jobs", json={"prompt": "a second fox"}, headers=AUTH)
+
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "QUEUE_SATURATED"
+    assert response.headers["Retry-After"]

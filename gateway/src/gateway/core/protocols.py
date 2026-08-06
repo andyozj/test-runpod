@@ -197,6 +197,17 @@ class JobRepository(Protocol):
         """
         ...
 
+    async def count_active(self, api_key_id: str) -> int:
+        """Count a caller's non-terminal jobs, for the per-key active cap.
+
+        Args:
+            api_key_id: The caller to count.
+
+        Returns:
+            How many of that caller's jobs are not yet terminal.
+        """
+        ...
+
 
 @runtime_checkable
 class RunPodClient(Protocol):

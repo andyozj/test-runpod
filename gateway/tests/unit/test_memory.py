@@ -15,13 +15,13 @@ from gateway.core.models import (
 from tests.conftest import FROZEN, FrozenClock
 
 
-def make_job(status: JobStatus = JobStatus.QUEUED) -> Job:
+def make_job(status: JobStatus = JobStatus.QUEUED, api_key_id: str = "demo") -> Job:
     params = GenerationParams(prompt="a fox")
     return Job(
         id=uuid.uuid4(),
         status=status,
         params=params,
-        context=RequestContext(api_key_id="demo", correlation_id="c-1"),
+        context=RequestContext(api_key_id=api_key_id, correlation_id="c-1"),
         created_at=FROZEN,
         updated_at=FROZEN,
         request_hash=params.fingerprint(),
@@ -143,3 +143,19 @@ async def test_the_upstream_id_is_recorded_even_on_a_cancelled_job(
 
     assert attached.runpod_job_id == "up-9"
     assert attached.status is JobStatus.CANCELLED
+
+
+async def test_count_active_counts_only_the_key_and_non_terminal_jobs(
+    clock: FrozenClock,
+) -> None:
+    repository = InMemoryJobRepository(clock=clock)
+    await repository.create(make_job())
+    terminal = await repository.create(make_job())
+    await repository.mark_failed(
+        terminal.id, ErrorCode.JOB_CANCELLED, "cancelled", JobStatus.CANCELLED
+    )
+    await repository.create(make_job(api_key_id="other"))
+
+    assert await repository.count_active("demo") == 1
+    assert await repository.count_active("other") == 1
+    assert await repository.count_active("nobody") == 0

@@ -20,9 +20,14 @@ from gateway.api.schemas import (
     JobCreated,
     JobView,
 )
-from gateway.core.models import ErrorCode
+from gateway.core.models import ErrorCode, GenerationParams, RequestContext
 from gateway.core.protocols import IdempotencyConflictError, UpstreamUnavailableError
-from gateway.core.service import JobService, QueueSaturatedError
+from gateway.core.service import (
+    ActiveJobLimitError,
+    JobService,
+    QueueSaturatedError,
+    Submission,
+)
 from gateway.settings import Settings
 
 logger = structlog.get_logger()
@@ -63,6 +68,33 @@ def _error(
     )
 
 
+def _shed(message: str, retry_after_s: int, correlation_id: str) -> HTTPException:
+    """A 429 telling the caller to retry later.
+
+    Shared by queue saturation and the per-key active job cap: both are
+    QUEUE_SATURATED to the caller — "shed this request, try again shortly" —
+    and there is no more specific code in the contract for the cap.
+
+    Args:
+        message: Caller-facing description of what was shed.
+        retry_after_s: How long to wait before retrying.
+        correlation_id: The request's trace id.
+
+    Returns:
+        The exception to raise.
+    """
+    return HTTPException(
+        status_code=429,
+        detail=ErrorBody(
+            code=ErrorCode.QUEUE_SATURATED.value,
+            message=message,
+            suggestion=f"Retry after {retry_after_s}s.",
+            correlation_id=correlation_id,
+        ).model_dump(),
+        headers={"Retry-After": str(retry_after_s)},
+    )
+
+
 def authenticate(settings: Settings, authorization: str | None) -> str:
     """Resolve the caller behind a bearer token.
 
@@ -88,6 +120,58 @@ def authenticate(settings: Settings, authorization: str | None) -> str:
         logger.warning("auth_failed")
         raise _error(401, ErrorCode.UNAUTHENTICATED, "Invalid API key.")
     return key_id
+
+
+async def _submit(
+    service: JobService, params: GenerationParams, ctx: RequestContext
+) -> Submission:
+    """Submit through the service, translating domain errors to HTTP ones.
+
+    Split out of the route handler because inlining it pushed `build_router`
+    past the complexity budget — the four error branches belong to the
+    submit step, not to routing.
+
+    Args:
+        service: The domain service.
+        params: Validated generation parameters.
+        ctx: Caller identity and trace.
+
+    Returns:
+        The created or replayed job.
+
+    Raises:
+        HTTPException: Translated from the service's domain errors.
+    """
+    try:
+        return await service.submit(params, ctx)
+    except UpstreamUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorBody(
+                code=ErrorCode.UPSTREAM_UNAVAILABLE.value,
+                message="The endpoint is unreachable.",
+                suggestion="Retry with the same Idempotency-Key.",
+                correlation_id=ctx.correlation_id,
+            ).model_dump(),
+            headers={"Retry-After": "5"},
+        ) from exc
+    except QueueSaturatedError as exc:
+        raise _shed(
+            "The endpoint queue is saturated.", exc.retry_after_s, ctx.correlation_id
+        ) from exc
+    except ActiveJobLimitError as exc:
+        raise _shed(
+            "You have reached your active job limit.",
+            exc.retry_after_s,
+            ctx.correlation_id,
+        ) from exc
+    except IdempotencyConflictError as exc:
+        raise _error(
+            409,
+            ErrorCode.IDEMPOTENCY_CONFLICT,
+            "Idempotency-Key was reused with a different request body.",
+            "Use a new key, or resend the original body.",
+        ) from exc
 
 
 def build_router(deps: Deps) -> APIRouter:
@@ -124,45 +208,13 @@ def build_router(deps: Deps) -> APIRouter:
         Returns:
             The created job, or the original job on an idempotent replay.
         """
-        from gateway.core.models import RequestContext
-
         key_id = _authenticate(authorization)
         ctx = RequestContext(
             api_key_id=key_id,
             correlation_id=x_correlation_id or str(uuid.uuid4()),
             idempotency_key=idempotency_key,
         )
-        try:
-            submission = await deps.service.submit(body.to_params(), ctx)
-        except UpstreamUnavailableError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=ErrorBody(
-                    code=ErrorCode.UPSTREAM_UNAVAILABLE.value,
-                    message="The endpoint is unreachable.",
-                    suggestion="Retry with the same Idempotency-Key.",
-                    correlation_id=ctx.correlation_id,
-                ).model_dump(),
-                headers={"Retry-After": "5"},
-            ) from exc
-        except QueueSaturatedError as exc:
-            raise HTTPException(
-                status_code=429,
-                detail=ErrorBody(
-                    code=ErrorCode.QUEUE_SATURATED.value,
-                    message="The endpoint queue is saturated.",
-                    suggestion=f"Retry after {exc.retry_after_s}s.",
-                    correlation_id=ctx.correlation_id,
-                ).model_dump(),
-                headers={"Retry-After": str(exc.retry_after_s)},
-            ) from exc
-        except IdempotencyConflictError as exc:
-            raise _error(
-                409,
-                ErrorCode.IDEMPOTENCY_CONFLICT,
-                "Idempotency-Key was reused with a different request body.",
-                "Use a new key, or resend the original body.",
-            ) from exc
+        submission = await _submit(deps.service, body.to_params(), ctx)
 
         job = submission.job
         response.headers["X-Correlation-ID"] = ctx.correlation_id

@@ -242,6 +242,21 @@ class InMemoryJobRepository:
         async with self._lock:
             self._leases.pop(job_id, None)
 
+    async def count_active(self, api_key_id: str) -> int:
+        """Count a caller's non-terminal jobs, for the per-key active cap.
+
+        Args:
+            api_key_id: The caller to count.
+
+        Returns:
+            How many of that caller's jobs are not yet terminal.
+        """
+        return sum(
+            1
+            for job in self._jobs.values()
+            if job.context.api_key_id == api_key_id and not job.status.terminal
+        )
+
     async def _update(self, job_id: UUID, **changes: object) -> Job:
         async with self._lock:
             job = self._jobs[job_id]

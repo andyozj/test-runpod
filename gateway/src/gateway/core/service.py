@@ -32,6 +32,7 @@ DEFAULT_MAX_QUEUE_WAIT_S = 120.0
 DEFAULT_AVG_JOB_S = 22.0
 DEFAULT_SUBMIT_GRACE_S = 30.0
 DEFAULT_HEALTH_MAX_AGE_S = 30.0
+DEFAULT_MAX_ACTIVE_JOBS_PER_KEY = 10
 
 # One lease must outlast the slowest tick. It only bounds recovery from a
 # reconciler that died mid-tick; a live one releases each claim as it goes.
@@ -66,6 +67,22 @@ class QueueSaturatedError(Exception):
         self.retry_after_s = retry_after_s
 
 
+class ActiveJobLimitError(Exception):
+    """Raised when the caller already has `max_active_jobs_per_key` unresolved.
+
+    Bounds how much of the billable queue one key can occupy at once, so a
+    single compromised or runaway credential cannot exhaust capacity for
+    every other caller.
+
+    Attributes:
+        retry_after_s: How long the caller should wait before retrying.
+    """
+
+    def __init__(self, retry_after_s: int) -> None:
+        super().__init__("The caller's active job limit has been reached.")
+        self.retry_after_s = retry_after_s
+
+
 @dataclass
 class JobService:
     """Submit, read and reconcile generation jobs.
@@ -83,6 +100,7 @@ class JobService:
         health_max_age_s: Age beyond which a health reading is treated as
             unknown.
         claim_lease_s: How long a reconciler claim excludes other callers.
+        max_active_jobs_per_key: Non-terminal job cap per caller.
     """
 
     repository: JobRepository
@@ -95,6 +113,7 @@ class JobService:
     submit_grace_s: float = DEFAULT_SUBMIT_GRACE_S
     health_max_age_s: float = DEFAULT_HEALTH_MAX_AGE_S
     claim_lease_s: float = DEFAULT_CLAIM_LEASE_S
+    max_active_jobs_per_key: int = DEFAULT_MAX_ACTIVE_JOBS_PER_KEY
     _health: EndpointHealth | None = None
     _health_at: datetime | None = None
     _outstanding: int = 0
@@ -120,9 +139,11 @@ class JobService:
 
         Raises:
             QueueSaturatedError: The estimated wait exceeds the threshold.
+            ActiveJobLimitError: The caller is already at its active job cap.
             IdempotencyConflictError: The key was reused with a different body.
         """
         self._check_queue_pressure()
+        await self._check_active_job_cap(ctx.api_key_id)
 
         verdict = self.guardrail.check(params.prompt)
         now = self.clock.now()
@@ -427,6 +448,22 @@ class JobService:
         wait = (self._health.in_queue / self._health.capacity) * self.avg_job_s
         if wait > self.max_queue_wait_s:
             raise QueueSaturatedError(retry_after_s=int(wait) + 1)
+
+    async def _check_active_job_cap(self, api_key_id: str) -> None:
+        """Reject once the caller already has the maximum unresolved jobs.
+
+        Counts non-terminal jobs only: a completed, failed, cancelled or
+        timed-out job frees the slot immediately.
+
+        Args:
+            api_key_id: The caller's identity.
+
+        Raises:
+            ActiveJobLimitError: The caller is at the cap.
+        """
+        active = await self.repository.count_active(api_key_id)
+        if active >= self.max_active_jobs_per_key:
+            raise ActiveJobLimitError(retry_after_s=int(self.avg_job_s) + 1)
 
     @property
     def outstanding(self) -> int:
