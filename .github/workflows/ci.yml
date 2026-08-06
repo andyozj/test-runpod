@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [worker]
+        package: [worker, gateway]
     steps:
       - uses: actions/checkout@v4
 
@@ -34,17 +34,44 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: uv run mypy src/
 
+      - name: Imports
+        if: matrix.package == 'gateway'
+        working-directory: gateway
+        run: uv run lint-imports
+
       - name: Tests
         working-directory: ${{ matrix.package }}
         run: uv run pytest -q --cov --cov-fail-under=80
 
-      - name: Doctests
+      - name: Doctests (worker)
         if: matrix.package == 'worker'
         working-directory: worker
         run: |
           uv run pytest --doctest-modules -q \
             src/worker/schemas.py src/worker/guardrails.py src/worker/errors.py
 
-# The worker image is deliberately NOT built here. A ~45GB image against the
-# ~14GB of free disk on a standard runner is a hard stop, not a slow path.
-# Build and push happen on a RunPod Pod; see docs/specs/06-build-deploy.md.
+      - name: Doctests (gateway)
+        if: matrix.package == 'gateway'
+        working-directory: gateway
+        run: |
+          uv run pytest --doctest-modules -q \
+            src/gateway/core/models.py src/gateway/core/protocols.py \
+            src/gateway/adapters/runpod_client.py src/gateway/adapters/guardrails.py
+
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Lint CLI tools
+        run: |
+          uvx ruff@0.7.4 format --check client scripts benchmarks
+          uvx ruff@0.7.4 check client scripts benchmarks
+
+# The worker image is deliberately NOT built here: the slim (~2.9GB) build is
+# a local one-liner (`make build-slim`) and the baked variant (~45GB) exceeds
+# a standard runner's disk. See docs/RUNBOOK.md for the deploy procedure.
