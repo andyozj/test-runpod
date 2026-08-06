@@ -34,6 +34,26 @@ def test_success_closes_it() -> None:
     assert breaker.allow(now=1.0)
 
 
+def test_half_open_admits_exactly_one_probe() -> None:
+    """Every caller passing at once would re-hammer a host that is still down."""
+    breaker = CircuitBreaker(threshold=1, cooldown_s=10)
+    breaker.record_failure(now=0.0)
+
+    assert breaker.allow(now=10.0)
+    assert not breaker.allow(now=10.0)
+    assert not breaker.allow(now=11.0)
+
+
+def test_a_successful_probe_reopens_the_gate() -> None:
+    breaker = CircuitBreaker(threshold=1, cooldown_s=10)
+    breaker.record_failure(now=0.0)
+
+    assert breaker.allow(now=10.0)
+    breaker.record_success()
+
+    assert breaker.allow(now=10.0)
+
+
 def test_failed_probe_rearms_the_cooldown() -> None:
     """A failure during half-open must re-open, not leave it closed forever."""
     breaker = CircuitBreaker(threshold=1, cooldown_s=10)

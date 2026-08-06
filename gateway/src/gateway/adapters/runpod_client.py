@@ -39,6 +39,11 @@ _STATUS_MAP = {
     "TIMED_OUT": JobStatus.TIMED_OUT,
 }
 
+_TERMINAL_CODE = {
+    JobStatus.TIMED_OUT: ErrorCode.JOB_TIMEOUT,
+    JobStatus.CANCELLED: ErrorCode.JOB_CANCELLED,
+}
+
 
 def map_status(raw: str) -> JobStatus:
     """Translate a RunPod status into the domain enum.
@@ -79,19 +84,28 @@ class CircuitBreaker:
     cooldown_s: float = 30.0
     _failures: int = 0
     _opened_at: float | None = None
+    _probing: bool = False
 
     def allow(self, now: float) -> bool:
-        """Whether a call may proceed.
+        """Take permission for a call, admitting one probe per cooldown.
+
+        Mutating, not a query: admitting the probe is the decision. Letting
+        every waiting caller through the moment the cooldown elapses re-hammers
+        a host that has not been shown to be back yet, which is the stampede
+        the breaker exists to prevent.
 
         Args:
             now: Monotonic time.
 
         Returns:
-            True when closed, or when half-open for a single probe.
+            True when closed, or for the single probe that reopens it.
         """
         if self._opened_at is None:
             return True
-        return now - self._opened_at >= self.cooldown_s
+        if self._probing or now - self._opened_at < self.cooldown_s:
+            return False
+        self._probing = True
+        return True
 
     def record_success(self) -> None:
         """Reset after a successful call."""
@@ -99,6 +113,7 @@ class CircuitBreaker:
             logger.info("breaker_closed")
         self._failures = 0
         self._opened_at = None
+        self._probing = False
 
     def record_failure(self, now: float) -> None:
         """Count a failure and open once the threshold is reached.
@@ -107,6 +122,7 @@ class CircuitBreaker:
             now: Monotonic time.
         """
         self._failures += 1
+        self._probing = False
         if self._failures >= self.threshold:
             # Re-stamping on every failure past the threshold restarts the
             # cooldown, so a failed half-open probe re-opens the breaker
@@ -142,11 +158,18 @@ class HttpRunPodClient:
 
         Returns:
             The upstream job id.
+
+        Raises:
+            UpstreamUnavailableError: The response carries no job id.
         """
         body = await self._request(
             "POST", "run", json={"input": payload}, idempotent=False
         )
-        return str(body["id"])
+        runpod_job_id = body.get("id")
+        if runpod_job_id is None:
+            msg = "accepted response carries no job id"
+            raise UpstreamUnavailableError(msg)
+        return str(runpod_job_id)
 
     async def status(self, runpod_job_id: str) -> RunPodJobStatus:
         """Fetch and map upstream job state.
@@ -155,7 +178,9 @@ class HttpRunPodClient:
             runpod_job_id: The upstream identifier.
 
         Returns:
-            The mapped status, with result, progress or error populated.
+            The mapped status, with result, progress or error populated. A
+            COMPLETED reading carrying no image is mapped to FAILED: a terminal
+            success with nothing in it is a failure the caller cannot act on.
         """
         body = await self._request("GET", f"status/{runpod_job_id}")
         status = map_status(str(body.get("status", "")))
@@ -167,14 +192,14 @@ class HttpRunPodClient:
 
         if status is JobStatus.COMPLETED:
             if raw_error is not None:
-                return _error_status(_decode_error(raw_error))
-            return RunPodJobStatus(status=status, result=_result(output))
+                return _error_status(_decode_error(raw_error), JobStatus.FAILED)
+            return _completion(output)
         if status.terminal:
             if raw_error is not None:
-                return _error_status(_decode_error(raw_error))
+                return _error_status(_decode_error(raw_error), status)
             return RunPodJobStatus(
                 status=status,
-                error_code=ErrorCode.INFERENCE_FAILED,
+                error_code=_TERMINAL_CODE.get(status, ErrorCode.INFERENCE_FAILED),
                 error_message="Generation failed.",
             )
         return RunPodJobStatus(status=status, progress=_progress(output))
@@ -248,8 +273,7 @@ class HttpRunPodClient:
                 continue
             else:
                 self.breaker.record_success()
-                body: dict[str, Any] = response.json()
-                return body
+                return _body(response, path)
 
         raise UpstreamUnavailableError(str(last))
 
@@ -264,6 +288,54 @@ def _backoff(attempt: int) -> float:
         Seconds to sleep.
     """
     return random.uniform(0, min(2.0**attempt * 0.1, 2.0))  # noqa: S311
+
+
+def _body(response: httpx.Response, path: str) -> dict[str, Any]:
+    """Parse a 2xx body, treating anything unparseable as unavailability.
+
+    An HTML error page from an intermediary is a 200 with a body we cannot
+    read; surfacing it as a `JSONDecodeError` puts a transport failure into
+    call sites that only handle `UpstreamUnavailableError`.
+
+    Args:
+        response: The successful response.
+        path: The endpoint path, for the error message.
+
+    Returns:
+        The decoded object.
+
+    Raises:
+        UpstreamUnavailableError: The body is not a JSON object.
+    """
+    try:
+        # Any: the decoded shape is whatever the upstream sent, and narrowing
+        # it to a dict is exactly what the check below does.
+        body: Any = response.json()
+    except ValueError as exc:
+        msg = f"non-JSON response from {path}"
+        raise UpstreamUnavailableError(msg) from exc
+    if not isinstance(body, dict):
+        msg = f"unexpected {type(body).__name__} body from {path}"
+        raise UpstreamUnavailableError(msg)
+    return body
+
+
+def _completion(output: Any) -> RunPodJobStatus:
+    """Map a COMPLETED reading, demoting an imageless one to FAILED.
+
+    Args:
+        output: The raw `output` field, of any shape.
+
+    Returns:
+        The completion, or an INFERENCE_FAILED status when no image is present.
+    """
+    if not isinstance(output, dict) or not output.get("image_base64"):
+        return RunPodJobStatus(
+            status=JobStatus.FAILED,
+            error_code=ErrorCode.INFERENCE_FAILED,
+            error_message="Upstream reported completion without an image.",
+        )
+    return RunPodJobStatus(status=JobStatus.COMPLETED, result=_result(output))
 
 
 def _result(output: dict[str, Any]) -> JobResult:
@@ -294,13 +366,26 @@ def _decode_error(raw: Any) -> dict[str, Any]:
     return decoded if isinstance(decoded, dict) else {"message": str(raw)}
 
 
-def _error_status(error: dict[str, Any]) -> RunPodJobStatus:
+def _error_status(error: dict[str, Any], status: JobStatus) -> RunPodJobStatus:
+    """Build a failure reading, keeping the upstream's own terminal status.
+
+    Args:
+        error: The decoded error envelope.
+        status: The mapped upstream status. TIMED_OUT and CANCELLED are
+            distinct outcomes and are preserved; collapsing them into FAILED
+            loses the only signal that says whether a deadline or a caller
+            stopped the job.
+
+    Returns:
+        The mapped failure.
+    """
     raw = str(error.get("code", ErrorCode.INFERENCE_FAILED.value))
     try:
         code = ErrorCode(raw)
     except ValueError:
         code = ErrorCode.INFERENCE_FAILED
-    status = JobStatus.BLOCKED if raw.endswith("_BLOCKED") else JobStatus.FAILED
+    if raw.endswith("_BLOCKED"):
+        status = JobStatus.BLOCKED
     return RunPodJobStatus(
         status=status,
         error_code=code,

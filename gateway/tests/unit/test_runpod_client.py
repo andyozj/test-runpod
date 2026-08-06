@@ -149,6 +149,84 @@ async def test_health_maps_queue_and_worker_counts() -> None:
     assert health.capacity == 3
 
 
+async def test_completed_without_an_image_maps_to_failed() -> None:
+    """A terminal success with no image is a failure, not a result."""
+    client, _ = make([httpx.Response(200, json={"status": "COMPLETED", "output": {}})])
+
+    result = await client.status("up-1")
+
+    assert result.status is JobStatus.FAILED
+    assert result.error_code is ErrorCode.INFERENCE_FAILED
+    assert result.result is None
+
+
+async def test_completed_with_a_non_dict_output_maps_to_failed() -> None:
+    client, _ = make(
+        [httpx.Response(200, json={"status": "COMPLETED", "output": ["unexpected"]})]
+    )
+
+    result = await client.status("up-1")
+
+    assert result.status is JobStatus.FAILED
+    assert result.result is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("TIMED_OUT", JobStatus.TIMED_OUT),
+        ("CANCELLED", JobStatus.CANCELLED),
+    ],
+)
+async def test_terminal_upstream_statuses_are_preserved(
+    raw: str, expected: JobStatus
+) -> None:
+    envelope = json.dumps({"code": "INFERENCE_FAILED", "message": "stopped"})
+    client, _ = make([httpx.Response(200, json={"status": raw, "error": envelope})])
+
+    result = await client.status("up-1")
+
+    assert result.status is expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("TIMED_OUT", ErrorCode.JOB_TIMEOUT),
+        ("CANCELLED", ErrorCode.JOB_CANCELLED),
+    ],
+)
+async def test_terminal_upstream_statuses_carry_their_own_code(
+    raw: str, expected: ErrorCode
+) -> None:
+    client, _ = make([httpx.Response(200, json={"status": raw})])
+
+    result = await client.status("up-1")
+
+    assert result.error_code is expected
+
+
+async def test_a_non_json_body_raises_upstream_unavailable() -> None:
+    client, _ = make([httpx.Response(200, text="<html>gateway timeout</html>")])
+
+    with pytest.raises(UpstreamUnavailableError):
+        await client.status("up-1")
+
+
+async def test_a_non_object_json_body_raises_upstream_unavailable() -> None:
+    client, _ = make([httpx.Response(200, json=["unexpected"])])
+
+    with pytest.raises(UpstreamUnavailableError):
+        await client.status("up-1")
+
+
+async def test_submit_without_an_id_raises_upstream_unavailable() -> None:
+    client, _ = make([httpx.Response(200, json={"status": "IN_QUEUE"})])
+
+    with pytest.raises(UpstreamUnavailableError):
+        await client.submit({"prompt": "x"})
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
