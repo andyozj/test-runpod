@@ -6,8 +6,11 @@ import hmac
 from functools import lru_cache
 from hashlib import sha256
 
+import structlog
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = structlog.get_logger()
 
 
 class Settings(BaseSettings):
@@ -42,10 +45,13 @@ class Settings(BaseSettings):
     version: str = Field(default="0.1.0")
 
     def key_digests(self) -> dict[str, bytes]:
-        """Return caller key digests, hashed once at startup.
+        """Return caller key digests, recomputed per call.
 
-        No table and no migration: this is a small fixed set of callers, and a
-        database round trip per request buys nothing.
+        No table and no migration: this is a small fixed set of callers, and
+        re-hashing a handful of keys per request is cheaper than the caching
+        it would take to avoid. A malformed pair is skipped loudly — silently
+        dropping a credential turns a config typo into a lockout with no
+        evidence.
 
         Returns:
             Digest mapped to the `api_key_id` it identifies.
@@ -53,6 +59,7 @@ class Settings(BaseSettings):
         digests: dict[str, bytes] = {}
         for pair in self.gateway_api_keys.split(","):
             if ":" not in pair:
+                logger.warning("malformed_api_key_pair", pair=pair.strip()[:8])
                 continue
             key_id, _, secret = pair.strip().partition(":")
             digests[key_id] = sha256(secret.encode()).digest()

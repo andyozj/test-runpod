@@ -8,10 +8,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
+# Install from the exported lock, not hand-listed ranges: the image runs the
+# same resolved set the tests ran against, or the build fails.
 COPY gateway/pyproject.toml gateway/uv.lock ./
-RUN uv pip install --system --no-cache \
-        "fastapi>=0.115" "uvicorn[standard]>=0.32" "httpx>=0.27" \
-        "pydantic>=2.9" "pydantic-settings>=2.5" "structlog>=24.4"
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+    && uv pip install --system --no-cache -r /tmp/requirements.txt \
+    && python -c "import fastapi, uvicorn, httpx, pydantic, structlog"
 
 COPY contracts/ /app/contracts/
 COPY gateway/src/ /app/src/

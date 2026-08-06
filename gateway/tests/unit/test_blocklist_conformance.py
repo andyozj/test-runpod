@@ -65,3 +65,11 @@ def test_verdict_names_the_matched_categories(
 def test_term_pattern_is_separator_tolerant() -> None:
     assert term_pattern("cat").search("a c-a-t sat")
     assert not term_pattern("cat").search("music attracts")
+
+
+def test_confusable_table_matches_the_worker() -> None:
+    """The `!`→`i` mapping is where the two tiers actually diverged once."""
+    guardrail = BlocklistGuardrail(terms={"test": ("zzqindigoqz",)})
+
+    assert guardrail.check("zzq!nd!goqz").blocked
+    assert normalise("g!re") == "gire"

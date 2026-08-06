@@ -16,7 +16,11 @@ import httpx
 import structlog
 
 from gateway.core.models import ErrorCode, JobResult, JobStatus, Progress
-from gateway.core.protocols import EndpointHealth, RunPodJobStatus
+from gateway.core.protocols import (
+    EndpointHealth,
+    RunPodJobStatus,
+    UpstreamUnavailableError,
+)
 
 logger = structlog.get_logger()
 
@@ -34,10 +38,6 @@ _STATUS_MAP = {
     "CANCELLED": JobStatus.CANCELLED,
     "TIMED_OUT": JobStatus.TIMED_OUT,
 }
-
-
-class UpstreamUnavailableError(Exception):
-    """Raised when the endpoint cannot be reached or the breaker is open."""
 
 
 def map_status(raw: str) -> JobStatus:
@@ -107,9 +107,13 @@ class CircuitBreaker:
             now: Monotonic time.
         """
         self._failures += 1
-        if self._failures >= self.threshold and self._opened_at is None:
+        if self._failures >= self.threshold:
+            # Re-stamping on every failure past the threshold restarts the
+            # cooldown, so a failed half-open probe re-opens the breaker
+            # instead of leaving it permanently closed mid-outage.
+            if self._opened_at is None:
+                logger.warning("breaker_opened", failures=self._failures)
             self._opened_at = now
-            logger.warning("breaker_opened", failures=self._failures)
 
 
 @dataclass
@@ -139,7 +143,9 @@ class HttpRunPodClient:
         Returns:
             The upstream job id.
         """
-        body = await self._request("POST", "run", json={"input": payload})
+        body = await self._request(
+            "POST", "run", json={"input": payload}, idempotent=False
+        )
         return str(body["id"])
 
     async def status(self, runpod_job_id: str) -> RunPodJobStatus:
@@ -197,7 +203,9 @@ class HttpRunPodClient:
         """
         await self._request("POST", f"cancel/{runpod_job_id}")
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request(
+        self, method: str, path: str, *, idempotent: bool = True, **kwargs: Any
+    ) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         if not self.breaker.allow(loop.time()):
             raise UpstreamUnavailableError("circuit breaker open")
@@ -217,12 +225,23 @@ class HttpRunPodClient:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 # 4xx other than 429: the payload is rejected on every attempt,
-                # so retrying only wastes time.
+                # so retrying only wastes time. The breaker resets because a
+                # rejection proves the host is up and answering.
                 self.breaker.record_success()
                 raise UpstreamUnavailableError(str(exc)) from exc
             except (httpx.HTTPError, UpstreamUnavailableError) as exc:
-                last = exc
                 self.breaker.record_failure(loop.time())
+                # A transport error after the request was sent (read timeout,
+                # dropped connection) is ambiguous: the job may already exist
+                # upstream. Retrying a non-idempotent call there creates a
+                # duplicate GPU job, so only connect-phase failures and
+                # explicit retryable statuses are retried for those.
+                ambiguous = isinstance(exc, httpx.HTTPError) and not isinstance(
+                    exc, httpx.ConnectError | httpx.ConnectTimeout
+                )
+                if not idempotent and ambiguous:
+                    raise UpstreamUnavailableError(str(exc)) from exc
+                last = exc
                 if attempt < self.max_attempts:
                     await asyncio.sleep(_backoff(attempt))
                     logger.info("upstream_retry", attempt=attempt, error=str(exc))

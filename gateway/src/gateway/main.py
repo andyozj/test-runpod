@@ -54,6 +54,11 @@ def build(settings: Settings | None = None) -> FastAPI:
     """
     settings = settings or get_settings()
     configure_logging()
+    if settings.gateway_api_keys == Settings.model_fields["gateway_api_keys"].default:
+        structlog.get_logger().warning(
+            "default_api_keys_in_use",
+            detail="GATEWAY_API_KEYS is unset; the documented dev key works",
+        )
 
     clock = SystemClock()
     http = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
@@ -83,7 +88,14 @@ def build(settings: Settings | None = None) -> FastAPI:
             yield
         await http.aclose()
 
-    return create_app(Deps(service=service, settings=settings), on_startup=lifespan)
+    return create_app(
+        Deps(
+            service=service,
+            settings=settings,
+            reconciler_age=lambda: reconciler.seconds_since_last_run,
+        ),
+        on_startup=lifespan,
+    )
 
 
 app = build()

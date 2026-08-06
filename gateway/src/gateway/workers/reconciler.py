@@ -59,7 +59,11 @@ class Reconciler:
                 logger.warning("reconcile_tick_failed", error=str(exc))
             self._last_run_monotonic = asyncio.get_running_loop().time()
 
-            base = self.interval_s if advanced else self.idle_interval_s
+            # Fast cadence while any job is outstanding, not only when one
+            # advanced — a running job that reported no new progress still
+            # deserves a 2s poll, not a 10s one.
+            busy = advanced or self.service.outstanding
+            base = self.interval_s if busy else self.idle_interval_s
             await asyncio.sleep(base * random.uniform(1 - JITTER, 1 + JITTER))  # noqa: S311
 
     @property

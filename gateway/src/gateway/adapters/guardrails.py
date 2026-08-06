@@ -15,14 +15,24 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-_CONTRACT = Path(__file__).resolve().parents[4] / "contracts" / "blocklist.json"
+from gateway.contracts import contract_path
 
 _INVISIBLE = re.compile(r"[­​‌‍⁠﻿]")
 _SEPARATOR_CHARS = r"[\s\-_.*+~/\\|]"
 _SEPARATORS = re.compile(rf"{_SEPARATOR_CHARS}+")
 _SEPARATOR_RUN = rf"{_SEPARATOR_CHARS}*"
 _CONFUSABLES = str.maketrans(
-    {"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"}
+    {
+        "0": "o",
+        "1": "i",
+        "3": "e",
+        "4": "a",
+        "5": "s",
+        "7": "t",
+        "@": "a",
+        "$": "s",
+        "!": "i",
+    }
 )
 
 
@@ -102,7 +112,7 @@ class BlocklistGuardrail:
         Returns:
             A guardrail bound to the contract's terms.
         """
-        data = json.loads((path or _CONTRACT).read_text())
+        data = json.loads((path or contract_path("blocklist.json")).read_text())
         return cls(
             terms={
                 name: tuple(normalise(term) for term in terms)

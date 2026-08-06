@@ -27,6 +27,7 @@ class ErrorCode(StrEnum):
     UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE"
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     JOB_TIMEOUT = "JOB_TIMEOUT"
+    JOB_CANCELLED = "JOB_CANCELLED"
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     QUEUE_SATURATED = "QUEUE_SATURATED"
 
@@ -98,10 +99,6 @@ class WorkerError(Exception):
             'OOM'
         """
         return {"error": json.dumps(self.envelope()["error"])}
-
-
-class InvalidInputError(WorkerError):
-    """Raised when a job payload fails validation."""
 
 
 class GuardrailBlockedError(WorkerError):

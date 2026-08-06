@@ -21,7 +21,7 @@ from gateway.api.schemas import (
     JobView,
 )
 from gateway.core.models import ErrorCode
-from gateway.core.protocols import IdempotencyConflictError
+from gateway.core.protocols import IdempotencyConflictError, UpstreamUnavailableError
 from gateway.core.service import JobService, QueueSaturatedError
 from gateway.settings import Settings
 
@@ -31,6 +31,10 @@ HTTP_OK = 200
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
 
+# A reconciler tick normally lands every 2-10s; three idle intervals of
+# silence means the loop is dead, not slow.
+RECONCILER_STALL_S = 30.0
+
 
 @dataclass
 class Deps:
@@ -39,10 +43,13 @@ class Deps:
     Attributes:
         service: The domain service.
         settings: Runtime configuration.
+        reconciler_age: Seconds since the reconciler last completed a tick,
+            None before its first run. Absent outside the composition root.
     """
 
     service: JobService
     settings: Settings
+    reconciler_age: Callable[[], float | None] | None = None
 
 
 def _error(
@@ -127,6 +134,17 @@ def build_router(deps: Deps) -> APIRouter:
         )
         try:
             job = await deps.service.submit(body.to_params(), ctx)
+        except UpstreamUnavailableError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=ErrorBody(
+                    code=ErrorCode.UPSTREAM_UNAVAILABLE.value,
+                    message="The endpoint is unreachable.",
+                    suggestion="Retry with the same Idempotency-Key.",
+                    correlation_id=ctx.correlation_id,
+                ).model_dump(),
+                headers={"Retry-After": "5"},
+            ) from exc
         except QueueSaturatedError as exc:
             raise HTTPException(
                 status_code=429,
@@ -169,9 +187,11 @@ def build_router(deps: Deps) -> APIRouter:
         Returns:
             The job's current state.
         """
-        _authenticate(authorization)
+        key_id = _authenticate(authorization)
         job = await deps.service.get(job_id)
-        if job is None:
+        # Another caller's job answers 404, not 403: confirming the id exists
+        # is itself a leak.
+        if job is None or job.context.api_key_id != key_id:
             raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
         return JobView.of(job)
 
@@ -192,7 +212,10 @@ def build_router(deps: Deps) -> APIRouter:
         Returns:
             The job in its cancelled state.
         """
-        _authenticate(authorization)
+        key_id = _authenticate(authorization)
+        existing = await deps.service.get(job_id)
+        if existing is None or existing.context.api_key_id != key_id:
+            raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
         job = await deps.service.cancel(job_id)
         if job is None:
             raise _error(404, ErrorCode.JOB_NOT_FOUND, f"No job with id {job_id}.")
@@ -292,14 +315,12 @@ def create_app(deps: Deps, on_startup: Any = None) -> FastAPI:
         Returns:
             Per-dependency status.
         """
-        if (
-            not authorization
-            or deps.settings.resolve_key(authorization.removeprefix("Bearer ")) is None
-        ):
-            raise _error(401, ErrorCode.UNAUTHENTICATED, "Invalid API key.")
+        authenticate(deps.settings, authorization)
         upstream = deps.service.endpoint_health
+        age = deps.reconciler_age() if deps.reconciler_age else None
+        stalled = age is not None and age > RECONCILER_STALL_S
         return {
-            "status": "ok" if upstream else "degraded",
+            "status": "ok" if upstream and not stalled else "degraded",
             "version": deps.settings.version,
             "checks": {
                 "runpod": (
@@ -312,7 +333,12 @@ def create_app(deps: Deps, on_startup: Any = None) -> FastAPI:
                     }
                     if upstream
                     else {"status": "unknown", "detail": "no health reading yet"}
-                )
+                ),
+                "reconciler": (
+                    {"status": "stalled" if stalled else "ok", "last_tick_s": age}
+                    if age is not None
+                    else {"status": "unknown", "detail": "no completed tick yet"}
+                ),
             },
         }
 

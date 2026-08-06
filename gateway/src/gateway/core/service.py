@@ -65,6 +65,7 @@ class JobService:
     max_queue_wait_s: float = DEFAULT_MAX_QUEUE_WAIT_S
     avg_job_s: float = DEFAULT_AVG_JOB_S
     _health: EndpointHealth | None = None
+    _outstanding: int = 0
 
     async def submit(self, params: GenerationParams, ctx: RequestContext) -> Job:
         """Guard, record, and dispatch a generation request.
@@ -156,7 +157,7 @@ class JobService:
             await self.runpod.cancel(job.runpod_job_id)
         return await self.repository.mark_failed(
             job.id,
-            ErrorCode.JOB_TIMEOUT,
+            ErrorCode.JOB_CANCELLED,
             "Cancelled by the caller.",
             JobStatus.CANCELLED,
         )
@@ -176,7 +177,9 @@ class JobService:
         """
         await self._refresh_health()
         advanced = 0
-        for job in await self.repository.claim_unresolved(limit):
+        unresolved = await self.repository.claim_unresolved(limit)
+        self._outstanding = len(unresolved)
+        for job in unresolved:
             try:
                 if await self._reconcile_one(job):
                     advanced += 1
@@ -283,6 +286,15 @@ class JobService:
         wait = (self._health.in_queue / self._health.capacity) * self.avg_job_s
         if wait > self.max_queue_wait_s:
             raise QueueSaturatedError(retry_after_s=int(wait) + 1)
+
+    @property
+    def outstanding(self) -> int:
+        """Unresolved jobs seen by the last reconcile tick.
+
+        Returns:
+            The count claimed on the most recent tick.
+        """
+        return self._outstanding
 
     @property
     def endpoint_health(self) -> EndpointHealth | None:

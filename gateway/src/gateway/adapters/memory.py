@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from gateway.core.models import (
@@ -34,9 +34,13 @@ class InMemoryJobRepository:
 
     Attributes:
         clock: Injected wall time, so `updated_at` is assertable.
+        retention_s: How long terminal jobs are kept. Results carry multi-MB
+            base64 images, so without eviction sustained traffic grows the
+            process until it OOMs.
     """
 
     clock: Clock
+    retention_s: float = 3600.0
     _jobs: dict[UUID, Job] = field(default_factory=dict)
     _by_key: dict[tuple[str, str], UUID] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -59,6 +63,7 @@ class InMemoryJobRepository:
         """
         key = job.context.idempotency_key
         async with self._lock:
+            self._evict_expired()
             if key is not None:
                 scoped = (job.context.api_key_id, key)
                 existing_id = self._by_key.get(scoped)
@@ -70,6 +75,28 @@ class InMemoryJobRepository:
                 self._by_key[scoped] = job.id
             self._jobs[job.id] = job
             return job
+
+    def _evict_expired(self) -> None:
+        """Drop terminal jobs older than the retention window.
+
+        Runs under the caller's lock. RunPod itself retains results for 30
+        minutes, so an hour here already outlives the upstream copy.
+        """
+        cutoff = self.clock.now() - timedelta(seconds=self.retention_s)
+        expired = {
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.status.terminal and job.updated_at < cutoff
+        }
+        if not expired:
+            return
+        for job_id in expired:
+            del self._jobs[job_id]
+        self._by_key = {
+            scoped: job_id
+            for scoped, job_id in self._by_key.items()
+            if job_id not in expired
+        }
 
     async def get(self, job_id: UUID) -> Job | None:
         """Fetch one job.

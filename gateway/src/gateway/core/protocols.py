@@ -21,6 +21,10 @@ class IdempotencyConflictError(Exception):
     """Raised when a key is replayed with a different request body."""
 
 
+class UpstreamUnavailableError(Exception):
+    """Raised when the endpoint cannot be reached or the breaker is open."""
+
+
 @dataclass(frozen=True)
 class RunPodJobStatus:
     """Upstream job state, already mapped out of RunPod's vocabulary.
@@ -250,4 +254,5 @@ __all__ = [
     "PromptGuardrail",
     "RunPodClient",
     "RunPodJobStatus",
+    "UpstreamUnavailableError",
 ]

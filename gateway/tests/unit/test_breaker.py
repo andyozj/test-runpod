@@ -32,3 +32,15 @@ def test_success_closes_it() -> None:
     breaker.record_success()
 
     assert breaker.allow(now=1.0)
+
+
+def test_failed_probe_rearms_the_cooldown() -> None:
+    """A failure during half-open must re-open, not leave it closed forever."""
+    breaker = CircuitBreaker(threshold=1, cooldown_s=10)
+    breaker.record_failure(now=0.0)
+
+    assert breaker.allow(now=10.0)  # half-open probe permitted
+    breaker.record_failure(now=10.0)  # the probe failed
+
+    assert not breaker.allow(now=15.0)
+    assert breaker.allow(now=20.0)

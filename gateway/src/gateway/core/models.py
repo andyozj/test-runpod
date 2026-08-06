@@ -6,11 +6,10 @@ import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-_CONTRACTS = Path(__file__).resolve().parents[4] / "contracts"
+from gateway.contracts import contract_path
 
 
 class JobStatus(StrEnum):
@@ -70,6 +69,7 @@ class ErrorCode(StrEnum):
     UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE"
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     JOB_TIMEOUT = "JOB_TIMEOUT"
+    JOB_CANCELLED = "JOB_CANCELLED"
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     QUEUE_SATURATED = "QUEUE_SATURATED"
 
@@ -80,7 +80,7 @@ def contract_codes() -> set[str]:
     Returns:
         Every code name in `contracts/error-codes.json`.
     """
-    data = json.loads((_CONTRACTS / "error-codes.json").read_text())
+    data = json.loads(contract_path("error-codes.json").read_text())
     codes: list[str] = data["codes"]
     return set(codes)
 

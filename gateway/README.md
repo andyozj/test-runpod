@@ -17,6 +17,8 @@ Clients could call RunPod directly. What that costs:
 
 ## Run it
 
+From the repo root — `compose.yaml` and `.env.example` live there:
+
 ```bash
 cp .env.example .env      # RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID
 docker compose up
@@ -28,7 +30,10 @@ curl -X POST localhost:8000/v1/jobs \
 # -> 202 {"job_id": "...", "status": "QUEUED"}
 
 curl localhost:8000/v1/jobs/<job_id> -H "Authorization: Bearer local-development-key"
-curl localhost:8000/v1/jobs/<job_id>/image -H "Authorization: Bearer local-development-key" -o fox.png
+
+# once COMPLETED, the result carries the image inline
+curl -s localhost:8000/v1/jobs/<job_id> -H "Authorization: Bearer local-development-key" \
+  | jq -r '.result.image_base64' | base64 -d > fox.png
 ```
 
 Interactive docs at `localhost:8000/docs`.
@@ -38,10 +43,10 @@ Interactive docs at `localhost:8000/docs`.
 | Route | Auth | Purpose |
 |---|---|---|
 | `POST /v1/jobs` | yes | Submit. `202` with a job id, or `200` replaying an idempotent duplicate |
-| `GET /v1/jobs/{id}` | yes | Status, live progress, result or error |
-| `GET /v1/jobs/{id}/image` | yes | The image bytes |
+| `GET /v1/jobs/{id}` | yes | Status, live progress, result or error. Scoped to the caller's own jobs |
+| `POST /v1/jobs/{id}/cancel` | yes | Stop a queued or running job, upstream included. Scoped likewise |
 | `GET /health` | **no** | Liveness. Probes cannot hold credentials |
-| `GET /health/detailed` | yes | Dependency status and cached endpoint health |
+| `GET /health/detailed` | yes | Upstream queue counts plus reconciler liveness |
 
 Headers: `Idempotency-Key` for safe retries, `X-Correlation-ID` to supply your own trace id.
 
@@ -59,6 +64,6 @@ Everything is testable with no database and no endpoint, because every dependenc
 
 ## Not implemented
 
-Persistence is in-memory. Postgres and Alembic are specified in [`docs/specs/02-gateway-core.md`](../docs/specs/02-gateway-core.md); `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. The consequence is that jobs do not survive a restart.
+Persistence is in-memory. Postgres and Alembic are specified in [`docs/specs/02-gateway-core.md`](../docs/specs/02-gateway-core.md); `InMemoryJobRepository` implements the same protocol, so swapping it is one binding in `main.py`. Jobs do not survive a restart, and terminal jobs are evicted after an hour — results carry multi-MB images, so unbounded retention is an OOM, and RunPod's own copy expires after 30 minutes anyway.
 
-The full gap list, ranked, is in [`docs/specs/08-production-readiness.md`](../docs/specs/08-production-readiness.md). The two that matter most: no per-caller rate limit, and no budget cap. Authentication answers *who*; nothing answers *how much*.
+The full gap list, ranked, is in [`docs/specs/08-production-readiness.md`](../docs/specs/08-production-readiness.md). The two that matter most: no per-caller rate limit, and no budget cap. Authentication answers *who*; nothing answers *how much*. The default `GATEWAY_API_KEYS` is a documented dev credential — the composition root logs a warning when it is in use; set your own before exposing the port.
