@@ -9,7 +9,8 @@
 #     human decision.
 #
 # Requirements, one-time:
-#   - Repo secret RUNPOD_API_KEY (deploys only; builds need nothing).
+#   - Repo secret RUNPOD_API_KEY (deploys and the post-deploy smoke test).
+#   - Repo secret RUNPOD_ENDPOINT_ID (the post-deploy smoke test only).
 #   - After the first push, set the GHCR package public (or add registry
 #     credentials in RunPod) so the endpoint can pull.
 #
@@ -44,7 +45,6 @@ concurrency:
 
 jobs:
   checks:
-    if: ${{ !inputs.tag }}
     uses: ./.github/workflows/ci.yml
 
   build-push:
@@ -57,11 +57,11 @@ jobs:
     outputs:
       tag: ${{ steps.build.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # git describe needs tag history
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -79,25 +79,87 @@ jobs:
           echo "tag=$TAG-slim" >> "$GITHUB_OUTPUT"
           echo "pushed $IMAGE:$TAG-slim" >> "$GITHUB_STEP_SUMMARY"
 
-  deploy:
-    # Deploys only from the manual entry point; a tag push stops at publish.
+  verify-tag:
+    # Gate before apply: whether the tag came from build-push or was typed
+    # into the `tag` input, confirm it is actually pullable before spending a
+    # deploy on it.
     if: ${{ github.event_name == 'workflow_dispatch' && always() && !cancelled() && !failure() }}
     needs: [build-push]
     runs-on: ubuntu-latest
-    environment: runpod
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: astral-sh/setup-uv@v3
+      - name: Verify the image tag exists in GHCR
+        env:
+          DEPLOY_TAG: ${{ inputs.tag }}
+          BUILT_TAG: ${{ needs.build-push.outputs.tag }}
+        run: |
+          TAG="${DEPLOY_TAG:-$BUILT_TAG}"
+          IMAGE="ghcr.io/${{ github.repository_owner }}/flux-worker"
+          docker manifest inspect "$IMAGE:$TAG" > /dev/null
+          echo "verified $IMAGE:$TAG exists in GHCR" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    # Deploys only from the manual entry point; a tag push stops at publish.
+    if: ${{ github.event_name == 'workflow_dispatch' && always() && !cancelled() && !failure() }}
+    needs: [build-push, verify-tag]
+    runs-on: ubuntu-latest
+    environment: runpod
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
 
       - name: Apply endpoint config
+        id: resolve
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          DEPLOY_TAG: ${{ inputs.tag }}
+          BUILT_TAG: ${{ needs.build-push.outputs.tag }}
+          DEPLOY_CONFIG: ${{ inputs.config }}
+          NO_BOUNCE: ${{ inputs.no_bounce }}
         run: |
-          TAG="${{ inputs.tag || needs.build-push.outputs.tag }}"
+          TAG="${DEPLOY_TAG:-$BUILT_TAG}"
+          CONFIG="${DEPLOY_CONFIG:-cached}"
           FLAGS=""
-          if [ "${{ inputs.no_bounce }}" = "true" ]; then FLAGS="--no-bounce"; fi
+          if [ "$NO_BOUNCE" = "true" ]; then FLAGS="--no-bounce"; fi
           uv run --no-project --with pyyaml python scripts/apply_endpoint.py \
-            --config "deploy/endpoints/${{ inputs.config || 'cached' }}.yaml" \
+            --config "deploy/endpoints/${CONFIG}.yaml" \
             --tag "$TAG" $FLAGS
-          echo "deployed $TAG (${{ inputs.config || 'cached' }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "deployed $TAG ($CONFIG)" >> "$GITHUB_STEP_SUMMARY"
+
+  smoke-test:
+    # Post-deploy gate: the deploy is not considered good until a real job
+    # runs against the live endpoint. Failure here fails the workflow.
+    if: ${{ github.event_name == 'workflow_dispatch' && always() && !cancelled() && !failure() }}
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    environment: runpod
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        with:
+          enable-cache: true
+
+      - name: Sync
+        working-directory: worker
+        run: uv sync --all-groups
+
+      - name: E2E smoke test against the deployed endpoint
+        working-directory: worker
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          RUNPOD_ENDPOINT_ID: ${{ secrets.RUNPOD_ENDPOINT_ID }}
+          CI: "true"
+        run: uv run pytest -m gpu tests/e2e -v

@@ -18,6 +18,10 @@ RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
 COPY contracts/ /app/contracts/
 COPY gateway/src/ /app/src/
 
+# Non-root: matches worker/Dockerfile's policy.
+RUN useradd --uid 1000 --create-home gateway
+USER gateway
+
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"

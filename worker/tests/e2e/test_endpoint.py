@@ -35,7 +35,13 @@ def _endpoint() -> Any:
     api_key = os.environ.get("RUNPOD_API_KEY")
     endpoint_id = os.environ.get("RUNPOD_ENDPOINT_ID")
     if not api_key or not endpoint_id:
-        pytest.skip("RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID not set")
+        msg = "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID not set"
+        if os.environ.get("CI"):
+            # In CI this suite is a required post-deploy gate, not an
+            # optional extra — a missing secret must fail the workflow,
+            # not silently pass by skipping every test.
+            pytest.fail(msg)
+        pytest.skip(msg)
     runpod.api_key = api_key
     return runpod.Endpoint(endpoint_id)
 

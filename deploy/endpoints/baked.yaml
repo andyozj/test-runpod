@@ -12,7 +12,7 @@
 # answerable from this repository, not from someone's browser history.
 
 name: flux-worker-baked
-image_repository: ghcr.io/OWNER/flux-worker
+image_repository: ghcr.io/andyozj/flux-worker
 
 gpu_types:
   # Ordered by preference. bf16 FLUX needs ~24-26GB steady, so 24GB cards are
