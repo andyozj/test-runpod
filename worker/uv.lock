@@ -2213,6 +2213,7 @@ name = "worker"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "huggingface-hub" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -2232,7 +2233,6 @@ gpu = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "huggingface-hub" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -2243,6 +2243,7 @@ dev = [
 requires-dist = [
     { name = "accelerate", marker = "extra == 'gpu'", specifier = ">=0.34" },
     { name = "diffusers", marker = "extra == 'gpu'", specifier = ">=0.31" },
+    { name = "huggingface-hub", specifier = ">=0.25" },
     { name = "pillow", specifier = ">=10.4" },
     { name = "protobuf", marker = "extra == 'gpu'", specifier = ">=5.28" },
     { name = "pydantic", specifier = ">=2.9" },
@@ -2257,7 +2258,6 @@ provides-extras = ["gpu"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "huggingface-hub", specifier = ">=0.25" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-cov", specifier = ">=5.0" },

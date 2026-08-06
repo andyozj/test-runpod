@@ -63,9 +63,12 @@ class RecordingImageGuardrail:
 
     verdict: GuardrailVerdict = field(default_factory=GuardrailVerdict)
     seen: list[bytes] = field(default_factory=list)
+    raises: Exception | None = None
 
     def check(self, image: bytes) -> GuardrailVerdict:
         self.seen.append(image)
+        if self.raises is not None:
+            raise self.raises
         return self.verdict
 
 

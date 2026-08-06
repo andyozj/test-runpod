@@ -136,13 +136,26 @@ def _first_message(exc: ValidationError) -> str:
 def _guard_prompt(request: GenerationRequest) -> None:
     """Reject a prompt before any GPU time is spent.
 
+    A guardrail that raises is treated as a block, not a crash: a broken
+    classifier must fail closed, not let every prompt through unchecked.
+
     Args:
         request: The validated request.
 
     Raises:
-        GuardrailBlockedError: The prompt was blocked.
+        GuardrailBlockedError: The prompt was blocked, or the guardrail itself
+            failed.
     """
-    verdict = _prompt_guardrail.check(request.prompt)
+    try:
+        verdict = _prompt_guardrail.check(request.prompt)
+    except WorkerError:
+        raise
+    except Exception as exc:
+        raise GuardrailBlockedError(
+            ErrorCode.PROMPT_BLOCKED,
+            "Prompt guardrail failed; request blocked to fail closed.",
+            "Retry; if it persists, contact support.",
+        ) from exc
     if verdict.blocked:
         raise GuardrailBlockedError(
             ErrorCode.PROMPT_BLOCKED,
@@ -155,19 +168,31 @@ def _guard_image(image_base64: str | None) -> None:
     """Reject a generated image before it is returned or uploaded.
 
     Runs before any upload: storing first and deleting after is a race the
-    blocker loses, and the object may already have been referenced.
+    blocker loses, and the object may already have been referenced. A
+    guardrail that raises is treated as a block, not a crash, for the same
+    fail-closed reason as `_guard_prompt`.
 
     Args:
         image_base64: The encoded image, if one was produced.
 
     Raises:
-        GuardrailBlockedError: The image was blocked.
+        GuardrailBlockedError: The image was blocked, or the guardrail itself
+            failed.
     """
     if image_base64 is None:
         return
     # The hook receives the decoded image bytes, as the protocol promises —
     # a real classifier bound here must not be handed base64 text.
-    verdict = _image_guardrail.check(base64.b64decode(image_base64))
+    try:
+        verdict = _image_guardrail.check(base64.b64decode(image_base64))
+    except WorkerError:
+        raise
+    except Exception as exc:
+        raise GuardrailBlockedError(
+            ErrorCode.IMAGE_BLOCKED,
+            "Image guardrail failed; result blocked to fail closed.",
+            "Retry; if it persists, contact support.",
+        ) from exc
     if verdict.blocked:
         raise GuardrailBlockedError(
             ErrorCode.IMAGE_BLOCKED,
@@ -179,7 +204,7 @@ def _guard_image(image_base64: str | None) -> None:
 def _run(
     job: dict[str, Any],
     request: GenerationRequest,
-    log: Any,
+    log: Any,  # structlog.get_logger() itself returns Any; no narrower public type exists
     pipeline: ImagePipeline | None = None,
     settings: Settings | None = None,
 ) -> GenerationResult:
@@ -261,7 +286,10 @@ def _progress_reporter(job: dict[str, Any]) -> ProgressCallback | None:
     return _report
 
 
-def _error_output(exc: WorkerError, log: Any) -> dict[str, Any]:
+def _error_output(
+    exc: WorkerError,
+    log: Any,  # same structlog.get_logger() Any as _run — see its comment
+) -> dict[str, Any]:
     """Serialise an error, retiring the worker when VRAM is exhausted.
 
     Args:
