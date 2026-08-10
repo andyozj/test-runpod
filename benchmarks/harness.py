@@ -1058,6 +1058,12 @@ def main() -> int:
         cfg["gpu_label"] = args.gpu_label
 
     if args.fake:
+        # A dry run must not touch the real record: its keys are the keys the
+        # measured run resolves against, so writing them here would make the
+        # next real run skip every cell as already done.
+        global RAW_PATH  # noqa: PLW0603
+        RAW_PATH = ROOT / "benchmarks" / "raw.fake.jsonl"
+        RAW_PATH.unlink(missing_ok=True)
         api: Api = FakeApi()
     else:
         api_key = os.environ.get("RUNPOD_API_KEY")

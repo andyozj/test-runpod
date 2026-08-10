@@ -28,3 +28,4 @@ docs/notes/
 docs/specs/
 docs/superpowers/
 .playwright-mcp/
+benchmarks/raw.fake.jsonl
