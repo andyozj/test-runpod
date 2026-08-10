@@ -10,6 +10,7 @@ ifeq ($(VERSION),)
 VERSION := 0.0.0-untagged
 endif
 IMAGE ?= ghcr.io/andyozj/flux-worker
+STACK_IMAGE ?= ghcr.io/andyozj/flux-stack
 TAG ?= $(VERSION)-$(shell git rev-parse --short HEAD)
 
 .DEFAULT_GOAL := help
@@ -21,6 +22,10 @@ help:
 
 .PHONY: print-tag
 print-tag: ## Print the derived image tag (version-sha)
+	@echo $(TAG)
+
+.PHONY: print-stack-tag
+print-stack-tag: ## Print the stack image tag (same version-sha, flux-stack repo)
 	@echo $(TAG)
 
 .PHONY: install
@@ -88,8 +93,8 @@ test: ## Run pytest with coverage on both packages
 	done
 
 .PHONY: test-tools
-test-tools: ## Run the scripts/ unit tests (apply_endpoint.py pure functions)
-	@uv run --no-project --with pytest --with pyyaml pytest -q scripts/tests
+test-tools: ## Run the scripts/ and benchmarks/ unit tests (pure functions, no network)
+	@uv run --no-project --with pytest --with pyyaml pytest -q scripts/tests benchmarks/tests
 
 .PHONY: doctest
 doctest: ## Run the executable examples (parity with the CI doctest gate)
@@ -119,3 +124,14 @@ build-baked: ## Build the weights-in-image variant (~45GB). Documented, not depl
 	docker buildx build --platform linux/amd64 \
 		--secret id=hf_token,env=HF_TOKEN \
 		-f worker/Dockerfile -t $(IMAGE):$(TAG)-baked .
+
+.PHONY: build-stack
+build-stack: ## Build the full-stack pod image (frontend + gateway + postgres)
+	docker buildx build --platform linux/amd64 \
+		--build-arg VERSION=$(VERSION) \
+		-f deploy/stack/Dockerfile -t $(STACK_IMAGE):$(TAG) .
+
+.PHONY: apply-pod
+apply-pod: ## Create-or-update the stack pod from deploy/pods/stack.yaml
+	uv run --no-project --with pyyaml python scripts/apply_pod.py \
+		--config deploy/pods/stack.yaml --tag $(TAG)

@@ -80,6 +80,23 @@ Burst of 6 against workersMax=3: queue wait p50 27.1s, max 50.6s. Execution time
 - `AVG_JOB_S = 21.8`: a p50, not a mean; feeds the gateway's `avg_job_s` queue-pressure setting
 - Cost per default image (1024², 28 steps): $0.0106 execution-only
 
+## First-party comparison: RunPod public FLUX.1-dev endpoint
+
+Same methodology, same cell: fixed seed 42, same prompt, 1024×1024, 28 steps, guidance 3.5 pinned on both sides, N=5 sequential probes per target, one discarded warmup each. Public endpoint `black-forest-labs-flux-1-dev` billed at \$0.02/megapixel (2026-08-09), failed generations free; ours at \$1.75/hr × execution seconds.
+
+**Not yet measured — harness support landed, run pending.** `--only public` takes the probes; the next full run renders this table.
+
+| Differs | Ours | Public endpoint |
+|---|---|---|
+| Steps control | `num_inference_steps` 1-50, default 28 | same field, same range, same default |
+| Guidance | `guidance_scale` 0-20, default 3.5 | `guidance` 0-10, default 7.5 |
+| Seed | `seed` ≥ 0 | `seed`, -1 = random. Same seed does not mean same image across stacks |
+| Delivery | base64 in the response | URL on image.runpod.ai; wall time excludes the download |
+| Retention | image is the response payload | URLs expire after 7 days; `raw.jsonl` keeps the URL, not the bytes |
+| Cold-start visibility | delayTime + worker lifecycle instrumented | managed pool: warm/cold state invisible, no /health, no worker controls |
+| Hardware | 48GB tier, card recorded | undisclosed |
+| Cost basis | \$/s × execution seconds; idle billing additive | flat \$/MP; queue and delay free |
+
 ## Descoped, and why
 
 | Planned | Status |

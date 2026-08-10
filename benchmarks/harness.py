@@ -10,6 +10,7 @@ Usage:
     python benchmarks/harness.py --tag 0.1.0-72e537d-slim --fake      # dry run
     python benchmarks/harness.py --tag 0.1.0-72e537d-slim             # ~1h GPU
     python benchmarks/harness.py --tag ... --only steps,cold --n 2    # subset
+    python benchmarks/harness.py --tag ... --only public   # vs public FLUX.1-dev
 """
 
 from __future__ import annotations
@@ -46,6 +47,21 @@ SECTIONS = (
     "queue",
     "flashboot",
 )
+WORKER_TARGET = "worker"
+PUBLIC_TARGET = "public-flux-dev"
+# Our field name -> the public endpoint's, per
+# https://docs.runpod.io/public-endpoints/models/flux-dev. Fields absent here
+# (e.g. anything worker-specific) do not exist in the public schema and are
+# dropped rather than sent.
+PUBLIC_FIELD_MAP = {
+    "prompt": "prompt",
+    "seed": "seed",
+    "width": "width",
+    "height": "height",
+    "num_inference_steps": "num_inference_steps",
+    "guidance_scale": "guidance",
+    "output_format": "image_format",
+}
 
 
 class Api:
@@ -176,6 +192,81 @@ class FakeApi(Api):
     def set_flashboot(self, enabled: bool) -> None:
         """No FlashBoot to toggle."""
         return
+
+
+def public_flux_payload(canonical: dict[str, Any]) -> dict[str, Any]:
+    """Map a payload in our worker's field names onto the public FLUX.1-dev schema.
+
+    Args:
+        canonical: The request as our worker would take it.
+
+    Returns:
+        The same request in the public endpoint's field names; fields the
+        public schema lacks are dropped.
+    """
+    return {
+        PUBLIC_FIELD_MAP[k]: v for k, v in canonical.items() if k in PUBLIC_FIELD_MAP
+    }
+
+
+def public_cost_usd(
+    output: dict[str, Any], width: int, height: int, rate_usd_per_mp: float
+) -> float:
+    """Cost of one public-endpoint image.
+
+    Args:
+        output: The job output; its `cost` field wins when present.
+        width: Requested width, for the $/megapixel fallback.
+        height: Requested height.
+        rate_usd_per_mp: The published $/megapixel rate.
+
+    Returns:
+        Dollars for this image.
+    """
+    reported = output.get("cost")
+    if isinstance(reported, (int, float)):  # noqa: UP038 - runtime check, py3.9 safe
+        return float(reported)
+    return width * height / 1e6 * rate_usd_per_mp
+
+
+def worker_cost_usd(execution_ms: float, rate_usd_hr: float) -> float:
+    """Cost of one image on our endpoint: GPU $/s times execution seconds."""
+    return execution_ms / 1000 / 3600 * rate_usd_hr
+
+
+class FakePublicApi(Api):
+    """Synthetic public-endpoint records: URL output, cost field, no telemetry."""
+
+    sleep_scale = 0.0
+
+    def __init__(self) -> None:
+        super().__init__("fake-public", "fake")
+        self._jobs: dict[str, dict[str, Any]] = {}
+        self._counter = 0
+
+    def submit(self, payload: dict[str, Any]) -> str:
+        """Fabricate a job shaped like the documented public response."""
+        self._counter += 1
+        job_id = f"fake-public-{self._counter}"
+        width = int(payload.get("width", 1024))
+        height = int(payload.get("height", 1024))
+        steps = int(payload.get("num_inference_steps", 28))
+        self._jobs[job_id] = {
+            "id": job_id,
+            "status": "COMPLETED",
+            "delayTime": 120,
+            "executionTime": int(900 + steps * 120 * (width * height / 1024**2)),
+            "workerId": "fake-public-worker",
+            "output": {
+                "image_url": f"https://image.runpod.ai/fake/{job_id}.jpeg",
+                "cost": width * height / 1e6 * 0.02,
+            },
+        }
+        return job_id
+
+    def wait(self, job_id: str, timeout_s: float = 900.0) -> dict[str, Any]:
+        """Return the fabricated record immediately."""
+        return self._jobs[job_id]
 
 
 def load_done(path: Path) -> set[str]:
@@ -469,6 +560,59 @@ def section_gpu(api: Api, cfg: dict[str, Any], done: set[str]) -> None:
         print(f"  {key}  delay={record['delay_ms']}ms exec={record['execution_ms']}ms")
 
 
+def section_public(api: Api, cfg: dict[str, Any], done: set[str]) -> None:
+    """Our endpoint vs RunPod's public FLUX.1-dev, same cell, sequential.
+
+    Not in the default sweep: it spends against an external endpoint, so it
+    runs only by name (`--only public`). Each target gets one discarded
+    warmup probe, then N measured ones.
+    """
+    pub = cfg.get("public_comparison")
+    if not pub:
+        print("  public_comparison not configured; skipping")
+        return
+    canonical = {
+        "prompt": cfg["prompt"],
+        "seed": cfg["seed"],
+        "width": pub["width"],
+        "height": pub["height"],
+        "num_inference_steps": pub["num_inference_steps"],
+        "guidance_scale": pub["guidance_scale"],
+        "output_format": pub["image_format"],
+    }
+    public_api: Api = (
+        FakePublicApi()
+        if isinstance(api, FakeApi)
+        else Api(pub["endpoint_slug"], api.api_key)
+    )
+    targets: tuple[tuple[str, Api, dict[str, Any]], ...] = (
+        (WORKER_TARGET, api, canonical),
+        (PUBLIC_TARGET, public_api, public_flux_payload(canonical)),
+    )
+    for target, target_api, payload in targets:
+        for i in range(-1, pub["n"]):  # index -1 is the discarded warmup
+            key = f"public:{target}-warmup:0" if i < 0 else f"public:{target}:{i}"
+            if key in done:
+                continue
+            meta: dict[str, Any] = (
+                {"discard": True} if i < 0 else {"target": target, "i": i}
+            )
+            record, output = run_case(target_api, key, payload, meta)
+            if target == PUBLIC_TARGET:
+                record["image_url"] = output.get("image_url")
+                cost = public_cost_usd(
+                    output, pub["width"], pub["height"], pub["rate_usd_per_mp"]
+                )
+            else:
+                cost = worker_cost_usd(record["execution_ms"] or 0, cfg["rate_usd_hr"])
+            record["cost_usd"] = round(cost, 6)
+            append_record(RAW_PATH, record)
+            print(
+                f"  {key}  exec={record['execution_ms']}ms "
+                f"cost=${record['cost_usd']:.4f}"
+            )
+
+
 def section_warmup(api: Api, cfg: dict[str, Any], done: set[str]) -> None:
     """One discarded job so sweeps never start against a cold worker."""
     key = "warmup:warmup:0"
@@ -672,6 +816,69 @@ def _comparisons_section(
     return comparisons, cost_28
 
 
+def _public_comparison_section(
+    cfg: dict[str, Any], records: list[dict[str, Any]]
+) -> list[str]:
+    """Render the first-party comparison, or its run-pending stub."""
+    pub = cfg.get("public_comparison")
+    if not pub:
+        return []
+    lines = [
+        "",
+        "## First-party comparison: RunPod public FLUX.1-dev endpoint",
+        "",
+        f"Same methodology, same cell: fixed seed {cfg['seed']}, same prompt, "
+        f"{pub['width']}×{pub['height']}, {pub['num_inference_steps']} steps, "
+        f"guidance {pub['guidance_scale']} pinned on both sides, "
+        f"N={pub['n']} sequential probes per target, one discarded warmup each. "
+        f"Public endpoint `{pub['endpoint_slug']}` billed at "
+        f"\\${pub['rate_usd_per_mp']:.2f}/megapixel ({pub['rate_date']}), "
+        f"failed generations free; ours at \\${cfg['rate_usd_hr']}/hr × "
+        "execution seconds.",
+        "",
+    ]
+    rows = _rows([r for r in records if not r.get("discard")], "target")
+    if rows:
+        lines += [
+            "| Target | N | exec p50 | wall p50 | wall p95 | \\$/image p50 |",
+            "|---|---|---|---|---|---|",
+        ]
+        for target, target_rows in sorted(rows.items()):
+            wall = _stats([float(r["observed_s"]) for r in target_rows])
+            execs = _stats(
+                [
+                    r["execution_ms"] / 1000
+                    for r in target_rows
+                    if r.get("execution_ms") is not None
+                ]
+            )
+            lines.append(
+                f"| {target} | {wall['n']} | {execs['p50']:.1f}s | "
+                f"{wall['p50']:.1f}s | {wall['p95']:.1f}s | "
+                f"\\${_p50(target_rows, 'cost_usd'):.4f} |"
+            )
+    else:
+        lines += [
+            "**Not yet measured — harness support landed, run pending.** "
+            "`--only public` takes the probes; the next full run renders "
+            "this table.",
+        ]
+    lines += [
+        "",
+        "| Differs | Ours | Public endpoint |",
+        "|---|---|---|",
+        "| Steps control | `num_inference_steps` 1-50, default 28 | same field, same range, same default |",
+        "| Guidance | `guidance_scale` 0-20, default 3.5 | `guidance` 0-10, default 7.5 |",
+        "| Seed | `seed` ≥ 0 | `seed`, -1 = random. Same seed does not mean same image across stacks |",
+        "| Delivery | base64 in the response | URL on image.runpod.ai; wall time excludes the download |",
+        "| Retention | image is the response payload | URLs expire after 7 days; `raw.jsonl` keeps the URL, not the bytes |",
+        "| Cold-start visibility | delayTime + worker lifecycle instrumented | managed pool: warm/cold state invisible, no /health, no worker controls |",
+        "| Hardware | 48GB tier, card recorded | undisclosed |",
+        "| Cost basis | \\$/s × execution seconds; idle billing additive | flat \\$/MP; queue and delay free |",
+    ]
+    return lines
+
+
 def render(cfg: dict[str, Any], tag: str) -> str:
     """Render BENCHMARKS.md from the raw records.
 
@@ -792,6 +999,7 @@ def render(cfg: dict[str, Any], tag: str) -> str:
             f"- `AVG_JOB_S = {avg:.1f}`: a p50, not a mean; feeds the gateway's `avg_job_s` queue-pressure setting",
             f"- Cost per default image (1024², 28 steps): ${avg / 3600 * rate:.4f} execution-only",
         ]
+    lines += _public_comparison_section(cfg, records)
     lines += [
         "",
         "## Descoped, and why",
@@ -856,6 +1064,7 @@ def main() -> int:
         "queue": section_queue,
         "flashboot": section_flashboot,
         "gpu": section_gpu,
+        "public": section_public,
     }
     requested = [name.strip() for name in args.only.split(",") if name.strip()]
     unknown = [name for name in requested if name not in sections]

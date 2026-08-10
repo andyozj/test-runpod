@@ -1,0 +1,68 @@
+{
+  "title": "FLUX.1-dev Text-to-Image",
+  "description": "Serverless FLUX.1-dev (bf16) worker: prompt in, base64 PNG/JPEG out. Validates input, enforces a prompt blocklist, snaps dimensions to multiples of 16, always echoes the seed, reports progress at ~10% strides, returns structured error envelopes. 2.9GB image; weights arrive via RunPod's cached models.",
+  "type": "serverless",
+  "category": "image",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 20,
+    "gpuCount": 1,
+    "gpuIds": "ADA_48_PRO,AMPERE_48,AMPERE_80",
+    "allowedCudaVersions": [
+      "13.0"
+    ],
+    "presets": [
+      {
+        "name": "Deployed defaults (cached models)",
+        "defaults": {
+          "MODEL_ID": "black-forest-labs/FLUX.1-dev",
+          "MODEL_REVISION": "unknown",
+          "WEIGHTS_PATH": "/opt/weights",
+          "MODEL_CACHE_ROOT": "/runpod-volume/huggingface-cache/hub"
+        }
+      }
+    ],
+    "env": [
+      {
+        "key": "MODEL_ID",
+        "input": {
+          "name": "Model ID",
+          "type": "string",
+          "description": "HuggingFace repository the weights come from. Must match the endpoint's Model field (cached models).",
+          "default": "black-forest-labs/FLUX.1-dev",
+          "advanced": false
+        }
+      },
+      {
+        "key": "MODEL_REVISION",
+        "input": {
+          "name": "Model revision",
+          "type": "string",
+          "description": "Reported, not pinned: discovered from the staged snapshot at load. Set only for weight layouts carrying no revision evidence.",
+          "default": "unknown",
+          "advanced": true
+        }
+      },
+      {
+        "key": "WEIGHTS_PATH",
+        "input": {
+          "name": "Weights path",
+          "type": "string",
+          "description": "Explicit diffusers-layout directory (baked image or mounted volume). When the path does not exist the worker falls through to the model cache — leave as-is on a cached-models endpoint.",
+          "default": "/opt/weights",
+          "advanced": true
+        }
+      },
+      {
+        "key": "MODEL_CACHE_ROOT",
+        "input": {
+          "name": "Model cache root",
+          "type": "string",
+          "description": "HuggingFace hub cache directory where RunPod stages the cached model. Used only when WEIGHTS_PATH is absent.",
+          "default": "/runpod-volume/huggingface-cache/hub",
+          "advanced": true
+        }
+      }
+    ]
+  }
+}

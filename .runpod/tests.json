@@ -1,0 +1,64 @@
+{
+  "tests": [
+    {
+      "name": "generate_small_image",
+      "input": {
+        "prompt": "a red fox in falling snow",
+        "width": 512,
+        "height": 512,
+        "num_inference_steps": 8,
+        "seed": 7
+      },
+      "timeout": 600000
+    },
+    {
+      "name": "seed_is_echoed",
+      "input": {
+        "prompt": "a clockwork owl",
+        "width": 512,
+        "height": 512,
+        "num_inference_steps": 8,
+        "seed": 1234
+      },
+      "timeout": 600000
+    },
+    {
+      "name": "dimensions_snap_to_multiple_of_16",
+      "input": {
+        "prompt": "a tiled courtyard",
+        "width": 1000,
+        "height": 1000,
+        "num_inference_steps": 8
+      },
+      "timeout": 600000
+    },
+    {
+      "name": "invalid_input_fails_fast",
+      "input": {
+        "prompt": "",
+        "width": 512
+      },
+      "timeout": 600000
+    },
+    {
+      "name": "blocked_prompt_returns_prompt_blocked",
+      "input": {
+        "prompt": "a photo of gore"
+      },
+      "timeout": 600000
+    }
+  ],
+  "config": {
+    "gpuTypeId": "NVIDIA L40S",
+    "gpuCount": 1,
+    "env": [
+      {
+        "key": "MODEL_CACHE_ROOT",
+        "value": "/runpod-volume/huggingface-cache/hub"
+      }
+    ],
+    "allowedCudaVersions": [
+      "13.0"
+    ]
+  }
+}

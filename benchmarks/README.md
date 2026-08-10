@@ -17,13 +17,14 @@ export RUNPOD_API_KEY=... RUNPOD_ENDPOINT_ID=...   # --fake needs neither
 python benchmarks/harness.py --tag <image-tag> --fake              # dry run, no GPU
 python benchmarks/harness.py --tag <image-tag>                     # full sweep, ~1h GPU
 python benchmarks/harness.py --tag <image-tag> --only steps,cold --n 2
+python benchmarks/harness.py --tag <image-tag> --only public            # vs RunPod's public FLUX.1-dev
 ```
 
 | Flag | Effect |
 |---|---|
 | `--tag` | Required. The image tag being measured; recorded on every row and printed in the report |
 | `--fake` | Substitutes a fake API. No credentials, no GPU, no spend — the way to check a change to the harness |
-| `--only` | Comma-separated subset. Default and render set: `warmup,steps,resolution,payload,concurrency,cold,queue,flashboot`. `gpu` is a ninth, runnable only by naming it — it measures a different card, so it is not part of a default sweep. An unknown name exits 2 and lists the valid ones |
+| `--only` | Comma-separated subset. Default and render set: `warmup,steps,resolution,payload,concurrency,cold,queue,flashboot`. Two more run only by naming them: `gpu` measures a different card, `public` probes RunPod's first-party FLUX.1-dev endpoint (`black-forest-labs-flux-1-dev`, $0.02/MP) alongside ours at the default cell — both spend outside the default sweep. An unknown name exits 2 and lists the valid ones |
 | `--n` | Override the per-config sample count from `config.json` |
 | `--gpu-label` | Card label for the `gpu` cross-tier section |
 
@@ -48,3 +49,4 @@ One file, no CLI equivalents. What each knob moves:
 | `cold_cycles`, `idle_timeout_s`, `workers_max` | Cold-start section: how many scale-to-zero cycles, how long past the endpoint's idle timeout to wait (`+20s`), and the ceiling `workersMax` is restored to after being driven to 0 — it must match the endpoint's real configuration |
 | `flashboot_idle_probes` | Post-idle resume probes |
 | `gpu`, `gpu_rates_usd_hr`, `rate_usd_hr`, `rate_date` | Card labels and \$/hr for the cost columns. Rates are hand-entered and dated; stale rates make the \$/image figures wrong |
+| `public_comparison` | The `public` section: public endpoint slug, cell (width/height/steps/guidance/format), N, and the \$/MP rate with its date and source URL. The section maps our field names onto the public schema (`guidance_scale`→`guidance`, `output_format`→`image_format`) and records \$/image on both sides — ours from `rate_usd_hr` × execution seconds, theirs from the response `cost` field (fallback: pixels/1e6 × \$/MP) |
