@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   ...base,
-  testMatch: /(preview-demo|demo-tour)\.spec\.ts/,
+  testMatch: /(preview-demo|demo-tour|live-tour)\.spec\.ts/,
   timeout: 240_000,
   use: {
     ...base.use,

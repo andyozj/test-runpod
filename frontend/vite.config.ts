@@ -23,12 +23,13 @@ function spaFallback(): Plugin {
   }
 }
 
+const gateway = process.env.GATEWAY_URL ?? 'http://localhost:8000'
+const proxy = { '/v1': gateway, '/health': gateway }
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), spaFallback()],
-  server: {
-    proxy: {
-      '/v1': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
-    },
-  },
+  server: { proxy },
+  // `vite preview` does not inherit server.proxy, so a non-mock build served by
+  // the preview server needs the same rules declared again.
+  preview: { proxy },
 })
