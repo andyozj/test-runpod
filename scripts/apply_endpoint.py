@@ -39,7 +39,9 @@ from pathlib import Path
 from typing import Any
 
 BASE_URL = "https://api.runpod.io/v2"
+RUN_BASE_URL = "https://api.runpod.ai/v2"
 TIMEOUT_S = 30
+BOUNCE_DRAIN_TIMEOUT_S = 240
 
 # `type` (QUEUE vs LOAD_BALANCER) is fixed at creation.
 PATCHABLE_FIELDS = (
@@ -84,6 +86,9 @@ def _request(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Cloudflare fronts api.runpod.io and answers the default
+            # `Python-urllib/x.y` agent with 403 error 1010.
+            "User-Agent": "flux-worker-deploy/1.0",
         },
         method=method,
     )
@@ -193,6 +198,34 @@ def patch_body(body: dict[str, Any]) -> dict[str, Any]:
     return {k: body[k] for k in PATCHABLE_FIELDS}
 
 
+def _live_worker_count(endpoint_id: str, api_key: str) -> int:
+    """Count workers the endpoint still holds, in any non-throttled state.
+
+    Args:
+        endpoint_id: The endpoint to inspect.
+        api_key: RunPod API key.
+
+    Returns:
+        Workers still attached, or -1 when the health call fails.
+    """
+    request = urllib.request.Request(  # noqa: S310 - fixed https host
+        f"{RUN_BASE_URL}/{endpoint_id}/health",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "flux-worker-deploy/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:  # noqa: S310
+            workers = json.loads(response.read()).get("workers", {})
+    except (urllib.error.HTTPError, urllib.error.URLError, ValueError):
+        return -1
+    return sum(
+        int(workers.get(state, 0))
+        for state in ("idle", "initializing", "ready", "running", "unhealthy")
+    )
+
+
 def _bounce_workers(endpoint_id: str, workers: dict[str, Any], api_key: str) -> None:
     """Force every worker to restart on the new release.
 
@@ -212,7 +245,14 @@ def _bounce_workers(endpoint_id: str, workers: dict[str, Any], api_key: str) -> 
 
     down = {**workers, "max": 0}
     _request("PATCH", f"/serverless/{endpoint_id}", api_key, {"workers": down})
-    time.sleep(20)
+    # 20s was not enough: retained workers were still serving the previous
+    # image minutes later (2026-08-10). Hold max=0 until the fleet reports
+    # empty, capped so a stuck worker cannot hang the deploy.
+    deadline = time.time() + BOUNCE_DRAIN_TIMEOUT_S
+    while time.time() < deadline:
+        time.sleep(10)
+        if _live_worker_count(endpoint_id, api_key) == 0:
+            break
     _request("PATCH", f"/serverless/{endpoint_id}", api_key, {"workers": workers})
     print(f"workers bounced   0 -> {workers['max']}; stale FlashBoot state evicted")
 
