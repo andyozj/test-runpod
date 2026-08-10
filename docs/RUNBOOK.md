@@ -14,6 +14,7 @@ A record, not a procedure. Update on every deploy. **A rollback that begins with
 | 2026-08-06 | `flux-worker-cached` (`<endpoint-id, supplied in the submission email>`) | `0.1.0-44c9643-slim` | - (first deploy) | Image digest `bfc09415c350`. Cached model + HF token set in console post-create |
 | 2026-08-06 | `flux-worker-cached` (`<endpoint-id, supplied in the submission email>`) | `0.1.0-72e537d-slim` | `0.1.0-44c9643-slim` | Error envelopes JSON-encoded; GPU list narrowed to L40S only. 7/7 e2e green post-roll |
 | 2026-08-06 | `flux-worker-cached` (`<endpoint-id, supplied in the submission email>`) | `0.1.0-b8d1f76-slim` | `0.1.0-72e537d-slim` | First deploy through `deploy.yml` (CI gates → GHCR → environment approval → apply). Ships revision discovery: `model_version` reports the staged snapshot's SHA; the pin is gone. 7/7 e2e green post-roll (143s incl. cold start) |
+| 2026-08-10 | `flux-worker-cached` (`<endpoint-id, supplied in the submission email>`) | `0.1.0-50c27c4-slim` | `0.1.0-b8d1f76-slim` | Ships latent preview streaming. First deploy through REST v2 by hand; both faults it exposed are fixed in `scripts/apply_endpoint.py` (`964fe44`). Preview frames confirmed on the wire: 4 `IN_PROGRESS` payloads, 1037-1768 JPEG bytes, shrinking as the latent denoises. Cold start 182.8s, warm 4.4s. 7/7 e2e green post-roll (123s) |
 
 ## Limits
 
@@ -74,10 +75,16 @@ What this runbook does not cover, so nobody looks for it at 3am:
 4. Push.
 
    ```bash
-   docker push $IMAGE:$TAG-slim
+   docker buildx build --platform linux/amd64 --provenance=false \
+     --build-arg BAKE_WEIGHTS=false -f worker/Dockerfile \
+     -t $IMAGE:$TAG-slim --push .
    ```
 
-   Success: the final line reads `<tag>: digest: sha256:... size: ...`.
+   Success: the final line reads `pushing manifest for ghcr.io/...`. Confirm with `docker manifest inspect $IMAGE:$TAG-slim` — the media type must be `application/vnd.docker.distribution.manifest.v2+json`.
+
+   **Not `docker push` after `make build-slim`.** With Docker's containerd image store that build produces an OCI index carrying an `unknown/unknown` attestation manifest, and the registry rejects it: the layers upload, then the manifest fails with `does not provide any platform` and nothing lands. Measured 2026-08-10. The buildx line above is the same build, pushed directly, and re-runs from cache in seconds. `deploy.yml` already builds this way, so CI was never affected.
+
+   A first push creates the GHCR package **private**, and RunPod cannot pull it. Make it public (package settings → change visibility) or register a pull credential; the worker package is public.
 
 The image also ships `test_input.json`, so on a GPU host `docker run --rm --gpus all $IMAGE:$TAG-slim` runs one real job end to end through the same `handler` the endpoint calls. First thing to try if the endpoint misbehaves.
 
