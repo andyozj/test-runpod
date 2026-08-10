@@ -12,3 +12,7 @@ docs
 **/.import_linter_cache
 **/.coverage
 .env
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report

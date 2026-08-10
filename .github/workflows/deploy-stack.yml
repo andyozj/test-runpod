@@ -1,0 +1,157 @@
+# Build, push and deploy the full-stack pod image (frontend + gateway +
+# postgres under s6-overlay; deploy/stack/Dockerfile).
+#
+# Manual only (workflow_dispatch): leave `tag` empty to build from the chosen
+# ref and deploy it; pass an existing tag to deploy — or roll back to — an
+# already-published image without rebuilding. Mirrors deploy.yml's shape:
+# checks -> build-push -> verify-tag -> deploy -> smoke-test.
+#
+# Requirements, one-time:
+#   - Repo secrets RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID, GATEWAY_API_KEYS
+#     (all three are injected into the pod env by apply_pod.py).
+#   - The `runpod` environment (same approval gate as deploy.yml).
+#   - After the first push, set the flux-stack GHCR package public (or add
+#     registry credentials in RunPod) so the pod can pull.
+#
+# Versioning: image tags are <version>-<sha> (no -slim suffix; there is one
+# stack variant). Immutable by construction — apply_pod.py refuses moving
+# tags, which is what makes "rollback = redeploy the previous tag" true.
+
+name: deploy-stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing stack image tag to deploy (e.g. 0.1.0-abc1234). Empty = build from this ref."
+        required: false
+      no_restart:
+        description: "Skip the pod restart after an update (the pod keeps serving the old image)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-stack
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  build-push:
+    if: ${{ !inputs.tag }}
+    needs: [checks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # git describe needs tag history
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push stack image
+        id: build
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || echo 0.0.0-untagged)
+          TAG="${VERSION}-$(git rev-parse --short HEAD)"
+          IMAGE=ghcr.io/${{ github.repository_owner }}/flux-stack
+          docker buildx build --platform linux/amd64 \
+            --build-arg VERSION="$VERSION" \
+            -f deploy/stack/Dockerfile -t "$IMAGE:$TAG" --push .
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "pushed $IMAGE:$TAG" >> "$GITHUB_STEP_SUMMARY"
+
+  verify-tag:
+    # Gate before apply: whether the tag came from build-push or was typed
+    # into the `tag` input, confirm it is actually pullable before spending a
+    # deploy on it.
+    if: ${{ always() && !cancelled() && !failure() }}
+    needs: [build-push]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify the image tag exists in GHCR
+        env:
+          DEPLOY_TAG: ${{ inputs.tag }}
+          BUILT_TAG: ${{ needs.build-push.outputs.tag }}
+        run: |
+          TAG="${DEPLOY_TAG:-$BUILT_TAG}"
+          IMAGE="ghcr.io/${{ github.repository_owner }}/flux-stack"
+          docker manifest inspect "$IMAGE:$TAG" > /dev/null
+          echo "verified $IMAGE:$TAG exists in GHCR" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    if: ${{ always() && !cancelled() && !failure() }}
+    needs: [build-push, verify-tag]
+    runs-on: ubuntu-latest
+    environment: runpod
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      pod_id: ${{ steps.resolve.outputs.pod_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+
+      - name: Apply pod config
+        id: resolve
+        shell: bash # pipefail, so a failed apply is not hidden by tee
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          RUNPOD_ENDPOINT_ID: ${{ secrets.RUNPOD_ENDPOINT_ID }}
+          GATEWAY_API_KEYS: ${{ secrets.GATEWAY_API_KEYS }}
+          DEPLOY_TAG: ${{ inputs.tag }}
+          BUILT_TAG: ${{ needs.build-push.outputs.tag }}
+          NO_RESTART: ${{ inputs.no_restart }}
+        run: |
+          TAG="${DEPLOY_TAG:-$BUILT_TAG}"
+          FLAGS=""
+          if [ "$NO_RESTART" = "true" ]; then FLAGS="--no-restart"; fi
+          uv run --no-project --with pyyaml python scripts/apply_pod.py \
+            --config deploy/pods/stack.yaml --tag "$TAG" $FLAGS | tee apply.out
+          POD_ID=$(awk '/^pod id:/ {print $NF}' apply.out)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "pod_id=$POD_ID" >> "$GITHUB_OUTPUT"
+          echo "deployed $TAG to pod $POD_ID" >> "$GITHUB_STEP_SUMMARY"
+
+  smoke-test:
+    # Post-deploy gate: the deploy is not considered good until the gateway
+    # answers through the public proxy. Failure here fails the workflow;
+    # rollback stays manual (re-run with the previous tag).
+    if: ${{ always() && !cancelled() && !failure() }}
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    environment: runpod
+    steps:
+      - name: Poll /health through the proxy
+        env:
+          POD_ID: ${{ needs.deploy.outputs.pod_id }}
+        run: |
+          URL="https://${POD_ID}-8000.proxy.runpod.net/health"
+          # Image pull + initdb/migrations on first boot; 10 minutes covers it.
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 10 "$URL" > /dev/null; then
+              echo "healthy: $URL" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "gateway never became healthy at $URL" >&2
+          exit 1

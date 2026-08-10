@@ -17,11 +17,13 @@
 name: flux-worker-cached
 image_repository: ghcr.io/andyozj/flux-worker
 
-# L40S only, by decision 2026-08-06: one GPU type keeps every measured number
-# on one card. The cost is queueing instead of falling back when L40S is
-# scarce — re-add "NVIDIA A100 80GB PCIe" here if that bites.
-gpu_types:
-  - NVIDIA L40S
+# REST v2 selects GPUs by pool, not by model. ADA_48_PRO = L40 / L40S /
+# 6000 Ada, all 48GB. The 2026-08-06 "L40S only" decision survives only
+# approximately: same architecture and VRAM, but v2 has no per-model pin, so
+# measured numbers may land on any card in the pool. Re-add AMPERE_80 here if
+# the pool queues too long.
+gpu_pools:
+  - ADA_48_PRO
 
 workers:
   min: 0
@@ -35,14 +37,11 @@ flashboot: true
 scaler_type: QUEUE_DELAY
 scaler_value: 4
 
-# The CUDA-wheel / host-driver pairing. uv.lock resolves torch with cu130
-# wheels, which need drivers from CUDA 13 hosts — a 12.x host fails CUDA init
-# at model load. Declaring it here fails fast at scheduling instead. If the
-# 13.0 pool proves too small, the fix is repinning torch to cu12x wheels and
-# widening this list in the same commit; listing 12.x now would defeat the
-# filter's purpose.
-allowed_cuda_versions:
-  - "13.0"
+# REST v2 has no allowedCudaVersions filter (verified against
+# api.runpod.io/v2/openapi.json, 2026-08-09), so the CUDA-wheel / host-driver
+# pairing can no longer fail fast at scheduling. uv.lock resolves torch with
+# cu130 wheels; a 12.x host now fails CUDA init at model load — see the
+# RUNBOOK diagnosis table. The fix if that bites is repinning torch to cu12x.
 
 # Disk for the image plus working space. The image is ~2.9GB.
 container_disk_gb: 20

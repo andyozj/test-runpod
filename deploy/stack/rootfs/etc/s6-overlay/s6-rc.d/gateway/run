@@ -1,0 +1,15 @@
+#!/command/with-contenv bash
+# The s6 dependency orders startup; readiness still needs a gate, because
+# postgres accepts no connections until recovery finishes. Migrations then run
+# inside the gateway's lifespan (gateway.main), before uvicorn serves.
+PG_ISREADY=/usr/lib/postgresql/16/bin/pg_isready
+until "$PG_ISREADY" -q -h 127.0.0.1 -p 5432; do
+    sleep 0.5
+done
+
+cd /app || exit 1
+# s6-setuidgid drops uid but keeps HOME=/root; asyncpg stats
+# ~/.postgresql/postgresql.key while parsing the DSN and dies on the
+# unreadable /root. Point HOME at the gateway user's home.
+export HOME=/home/gateway
+exec s6-setuidgid gateway uvicorn serve:app --host 0.0.0.0 --port 8000

@@ -1,12 +1,12 @@
-# Local gateway. One command, two environment variables.
+# Local stack. One command, two environment variables.
 #
 #   cp .env.example .env    # set RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID
 #   docker compose up
 #
-# Postgres is the specified production store, unimplemented.
-# The gateway currently uses an in-memory repository behind the same protocol,
-# so no database service is started — adding one without an implementation
-# using it would be scenery, not infrastructure.
+# Postgres is the default store, so jobs and images survive a restart (pgdata
+# and images volumes). Set DATABASE_URL= (empty) in .env to run the gateway in
+# memory mode instead: results stay inline base64, nothing persists, and the
+# postgres container idles unused.
 
 services:
   gateway:
@@ -21,6 +21,10 @@ services:
       RUNPOD_API_KEY: ${RUNPOD_API_KEY:?set RUNPOD_API_KEY in .env}
       RUNPOD_ENDPOINT_ID: ${RUNPOD_ENDPOINT_ID:?set RUNPOD_ENDPOINT_ID in .env}
       GATEWAY_API_KEYS: ${GATEWAY_API_KEYS:-demo:local-development-key}
+      # `-` not `:-`: an explicitly empty DATABASE_URL means memory mode.
+      DATABASE_URL: ${DATABASE_URL-postgresql://gateway:gateway@postgres:5432/gateway}
+      GATEWAY_IMAGE_DIR: ${GATEWAY_IMAGE_DIR:-/data/images}
+      GATEWAY_IMAGE_STORE_MAX_BYTES: ${GATEWAY_IMAGE_STORE_MAX_BYTES:-1073741824}
       RECONCILE_INTERVAL_S: ${RECONCILE_INTERVAL_S:-2.0}
       RECONCILE_IDLE_INTERVAL_S: ${RECONCILE_IDLE_INTERVAL_S:-10.0}
       RECONCILE_BATCH: ${RECONCILE_BATCH:-50}
@@ -30,4 +34,28 @@ services:
       SUBMIT_GRACE_S: ${SUBMIT_GRACE_S:-30.0}
       HEALTH_MAX_AGE_S: ${HEALTH_MAX_AGE_S:-30.0}
       MAX_ACTIVE_JOBS_PER_KEY: ${MAX_ACTIVE_JOBS_PER_KEY:-10}
+    volumes:
+      - images:/data/images
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+      POSTGRES_DB: gateway
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  images:

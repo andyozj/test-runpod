@@ -1,0 +1,51 @@
+# The full-stack pod: postgres + gateway + frontend build in one CPU pod
+# (deploy/stack/Dockerfile), supervised by s6-overlay.
+#
+#   python scripts/apply_pod.py --config deploy/pods/stack.yaml \
+#     --tag 0.1.0-<sha>
+#
+# Public URL: https://{pod-id}-8000.proxy.runpod.net. The proxy caps each
+# request at 100s (Cloudflare); the API is submit-and-poll, so no single
+# request approaches it.
+#
+# Secrets are NOT in this file. Everything under `secret_env` is read from the
+# apply-time environment by apply_pod.py and injected into the pod env.
+
+name: flux-stack
+image_repository: ghcr.io/andyozj/flux-stack
+
+# Smallest general-purpose flavor on Secure Cloud. SKU availability is
+# console-confirmed (design doc risk 2026-08-09); vcpu_count must be a power
+# of two per the v2 schema.
+cloud: SECURE
+cpu:
+  flavor: cpu3g
+  vcpu_count: 2
+
+# Image plus working space; nothing durable lives here.
+container_disk_gb: 20
+
+# Volume disk: survives stop/restart, lost on terminate (pg_dump first — see
+# RUNBOOK "Stack pod"). Holds pgdata and the image store.
+volume_gb: 20
+volume_mount_path: /workspace
+
+ports:
+  - 8000/http
+
+env:
+  # Postgres is colocated in the container; 5432 never leaves it.
+  DATABASE_URL: postgresql://gateway:gateway@localhost:5432/gateway
+  GATEWAY_IMAGE_DIR: /workspace/images
+  GATEWAY_IMAGE_STORE_MAX_BYTES: "1073741824"
+  GATEWAY_RATE_LIMIT_RPM: "30"
+  GATEWAY_RATE_LIMIT_BURST: "10"
+  MAX_ACTIVE_JOBS_PER_KEY: "10"
+
+# Read from the environment at apply time, never committed. The first two let
+# the gateway reach the GPU worker; GATEWAY_API_KEYS is the demo key set —
+# the gateway refuses to start without it.
+secret_env:
+  - RUNPOD_API_KEY
+  - RUNPOD_ENDPOINT_ID
+  - GATEWAY_API_KEYS

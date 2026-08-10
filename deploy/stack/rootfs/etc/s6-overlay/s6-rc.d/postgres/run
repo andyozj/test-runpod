@@ -1,0 +1,4 @@
+#!/command/with-contenv bash
+# Migrations are not run here: the gateway's lifespan owns them.
+exec s6-setuidgid postgres /usr/lib/postgresql/16/bin/postgres \
+    -D /workspace/pgdata -c listen_addresses=localhost

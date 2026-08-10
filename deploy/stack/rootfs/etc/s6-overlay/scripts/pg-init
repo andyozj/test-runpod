@@ -1,0 +1,24 @@
+#!/command/with-contenv bash
+# First-boot initialisation. Idempotent: a populated /workspace/pgdata (the
+# volume disk) is left alone, so pod stop/restart keeps every job and image.
+set -euo pipefail
+
+PG_BIN=/usr/lib/postgresql/16/bin
+PGDATA=/workspace/pgdata
+
+mkdir -p "$PGDATA" /workspace/images
+chown postgres:postgres "$PGDATA"
+chmod 700 "$PGDATA"
+chown gateway /workspace/images
+
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+    # trust auth is acceptable because postgres binds localhost only and the
+    # pod exposes 8000 alone; 5432 never leaves the container.
+    s6-setuidgid postgres "$PG_BIN/initdb" -D "$PGDATA" \
+        --auth=trust --no-instructions
+    s6-setuidgid postgres "$PG_BIN/pg_ctl" -D "$PGDATA" \
+        -o "-c listen_addresses=localhost" -w start
+    s6-setuidgid postgres "$PG_BIN/createuser" gateway
+    s6-setuidgid postgres "$PG_BIN/createdb" -O gateway gateway
+    s6-setuidgid postgres "$PG_BIN/pg_ctl" -D "$PGDATA" -m fast -w stop
+fi

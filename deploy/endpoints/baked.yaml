@@ -14,11 +14,12 @@
 name: flux-worker-baked
 image_repository: ghcr.io/andyozj/flux-worker
 
-gpu_types:
-  # Ordered by preference. bf16 FLUX needs ~24-26GB steady, so 24GB cards are
-  # excluded: too tight to be safe at 1024² and above.
-  - NVIDIA L40S
-  - NVIDIA A100 80GB PCIe
+gpu_pools:
+  # Ordered by preference. REST v2 selects by pool, not model: ADA_48_PRO =
+  # L40/L40S/6000 Ada (48GB), AMPERE_80 = A100 80GB. bf16 FLUX needs ~24-26GB
+  # steady, so 24GB pools are excluded: too tight to be safe at 1024² and above.
+  - ADA_48_PRO
+  - AMPERE_80
 
 workers:
   min: 0            # scale to zero; this is a demo endpoint, not a service
@@ -33,14 +34,11 @@ flashboot: true
 scaler_type: QUEUE_DELAY
 scaler_value: 4
 
-# The CUDA-wheel / host-driver pairing. uv.lock resolves torch with cu130
-# wheels, which need CUDA-13-capable hosts; declaring it here fails fast on
-# scheduling instead of at model load, and is the one-line fix if the first
-# deploy lands on older drivers. Widen this only after repinning torch.
-allowed_cuda_versions:
-  - "13.0"
-  - "12.9"
-  - "12.8"
+# REST v2 has no allowedCudaVersions filter (verified against
+# api.runpod.io/v2/openapi.json, 2026-08-09). uv.lock resolves torch with
+# cu130 wheels, which need CUDA-13-capable hosts; a mismatch now fails at
+# model load, not at scheduling. The fix if that bites is repinning torch to
+# cu12x wheels and rebuilding.
 
 # Disk for the image plus working space. The BAKED image is ~45GB — this
 # value must exceed it or the container can never pull.
