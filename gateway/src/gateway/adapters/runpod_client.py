@@ -470,8 +470,13 @@ def _progress(output: Any) -> Progress | None:
     # what the isinstance check below does.
     if not isinstance(output, dict) or "total" not in output:
         return None
+    preview_b64 = output.get("preview_b64")
     return Progress(
         step=int(output.get("step", 0)),
         total=int(output["total"]),
         percent=int(output.get("percent", 0)),
+        preview_b64=str(preview_b64) if preview_b64 else None,
+        preview_format=(
+            str(output["preview_format"]) if output.get("preview_format") else None
+        ),
     )

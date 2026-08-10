@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from gateway.adapters.memory import InMemoryJobRepository
+from gateway.adapters.ratelimit import TokenBucketRateLimiter
 from gateway.core.models import (
     ErrorCode,
     GenerationParams,
@@ -19,9 +20,15 @@ from gateway.core.protocols import (
     IdempotencyConflictError,
     RunPodJobStatus,
 )
-from gateway.core.service import ActiveJobLimitError, JobService, QueueSaturatedError
+from gateway.core.service import (
+    ActiveJobLimitError,
+    JobService,
+    QueueSaturatedError,
+    RateLimitedError,
+)
 from tests.conftest import (
     FakeGuardrail,
+    FakeImageStore,
     FakeRunPodClient,
     FrozenClock,
     Verdict,
@@ -115,6 +122,24 @@ async def test_reconcile_completes_a_finished_job(
     assert stored.result.seed == 7
 
 
+async def test_completion_finalizes_a_stale_progress_snapshot(
+    service: JobService, runpod: FakeRunPodClient
+) -> None:
+    job = (await service.submit(PARAMS, ctx())).job
+    runpod.next_status = in_progress(4, 8)
+    await service.reconcile()
+    runpod.next_status = completed()
+
+    await service.reconcile()
+
+    stored = await service.get(job.id)
+    assert stored is not None
+    assert stored.status is JobStatus.COMPLETED
+    assert stored.progress is not None
+    assert stored.progress.step == stored.progress.total
+    assert stored.progress.percent == 100
+
+
 async def test_reconcile_stores_progress_without_completing(
     service: JobService, runpod: FakeRunPodClient
 ) -> None:
@@ -128,6 +153,41 @@ async def test_reconcile_stores_progress_without_completing(
     assert stored.status is JobStatus.IN_PROGRESS
     assert stored.progress is not None
     assert stored.progress.percent == 43
+
+
+async def test_reconcile_passes_the_preview_frame_through(
+    service: JobService, runpod: FakeRunPodClient
+) -> None:
+    job = (await service.submit(PARAMS, ctx())).job
+    runpod.next_status = in_progress(12, 28, preview_b64="ZnJhbWU=")
+
+    await service.reconcile()
+
+    stored = await service.get(job.id)
+    assert stored is not None
+    assert stored.progress is not None
+    assert stored.progress.preview_b64 == "ZnJhbWU="
+    assert stored.progress.preview_format == "jpeg"
+
+
+async def test_completion_clears_the_preview_frame(
+    service: JobService, runpod: FakeRunPodClient
+) -> None:
+    """The final image supersedes the preview; terminal rows never keep one."""
+    job = (await service.submit(PARAMS, ctx())).job
+    runpod.next_status = in_progress(28, 28, preview_b64="ZnJhbWU=")
+    await service.reconcile()
+    runpod.next_status = completed()
+
+    await service.reconcile()
+
+    stored = await service.get(job.id)
+    assert stored is not None
+    assert stored.status is JobStatus.COMPLETED
+    assert stored.progress is not None
+    assert stored.progress.step == stored.progress.total
+    assert stored.progress.preview_b64 is None
+    assert stored.progress.preview_format is None
 
 
 async def test_unreachable_upstream_leaves_the_job_untouched(
@@ -620,3 +680,187 @@ async def test_active_job_cap_holds_under_concurrent_submissions(
     assert len(succeeded) == cap
     assert len(rejected) == attempts - cap
     assert await repository.count_active("demo") == cap
+
+
+# --- Per-key request rate limit ---
+
+
+def _limited_service(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+    burst: int,
+) -> JobService:
+    return JobService(
+        repository=repository,
+        runpod=runpod,
+        guardrail=guardrail,
+        clock=clock,
+        rate_limiter=TokenBucketRateLimiter(clock=clock, rpm=30, burst=burst),
+    )
+
+
+async def test_an_empty_bucket_sheds_the_submission(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    service = _limited_service(repository, runpod, guardrail, clock, burst=1)
+    await service.submit(PARAMS, ctx())
+
+    with pytest.raises(RateLimitedError) as exc:
+        await service.submit(GenerationParams(prompt="second"), ctx())
+
+    assert exc.value.retry_after_s == 2  # one token at 0.5 tokens/s
+    assert len(runpod.submissions) == 1
+
+
+async def test_a_rate_limited_job_is_recorded_as_failed(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    """A shed request is still an attributable row, like the other sheds."""
+    service = _limited_service(repository, runpod, guardrail, clock, burst=1)
+    await service.submit(PARAMS, ctx())
+    with pytest.raises(RateLimitedError):
+        await service.submit(GenerationParams(prompt="second"), ctx())
+
+    shed = (await service.list_jobs("demo", 10))[0]
+
+    assert shed.status is JobStatus.FAILED
+    assert shed.error_code is ErrorCode.QUEUE_SATURATED
+
+
+async def test_a_rate_limited_job_releases_its_idempotency_key(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    """A 429'd idempotent retry must still be able to become a real attempt."""
+    service = _limited_service(repository, runpod, guardrail, clock, burst=1)
+    await service.submit(PARAMS, ctx())
+    with pytest.raises(RateLimitedError):
+        await service.submit(PARAMS, ctx(key="rl-1"))
+
+    clock.advance(2)  # one token refilled
+    retry = await service.submit(PARAMS, ctx(key="rl-1"))
+
+    assert not retry.replayed
+    assert retry.job.status is JobStatus.QUEUED
+    assert len(runpod.submissions) == 2
+
+
+async def test_a_replay_is_answered_before_the_rate_limit(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    """A retry of an accepted job gets its id back, and spends no token."""
+    service = _limited_service(repository, runpod, guardrail, clock, burst=1)
+    first = await service.submit(PARAMS, ctx(key="retry-me"))
+
+    replay = await service.submit(PARAMS, ctx(key="retry-me"))
+
+    assert replay.replayed
+    assert replay.job.id == first.job.id
+    assert len(runpod.submissions) == 1
+
+
+async def test_rate_limit_is_scoped_per_key(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    service = _limited_service(repository, runpod, guardrail, clock, burst=1)
+    await service.submit(PARAMS, ctx(api_key_id="demo"))
+
+    other = await service.submit(PARAMS, ctx(api_key_id="other"))
+
+    assert other.job.status is JobStatus.QUEUED
+
+
+# --- Image offload on completion ---
+
+
+def stored_service(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+    store: FakeImageStore,
+) -> JobService:
+    return JobService(
+        repository=repository,
+        runpod=runpod,
+        guardrail=guardrail,
+        clock=clock,
+        image_store=store,
+    )
+
+
+async def test_a_completed_image_is_offloaded_to_the_store(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    store = FakeImageStore()
+    service = stored_service(repository, runpod, guardrail, clock, store)
+    job = (await service.submit(PARAMS, ctx())).job
+    runpod.next_status = completed(seed=99)
+
+    await service.reconcile()
+
+    stored = await service.get(job.id)
+    assert stored is not None and stored.result is not None
+    assert stored.result.image_base64 is None
+    assert stored.result.image_path == f"{job.id}.png"
+    assert stored.result.thumbhash == store.thumbhash
+    assert stored.result.seed == 99
+    assert store.saved[f"{job.id}.png"] == b"hello"
+
+
+async def test_without_a_store_the_image_stays_inline(
+    service: JobService, runpod: FakeRunPodClient
+) -> None:
+    job = (await service.submit(PARAMS, ctx())).job
+    runpod.next_status = completed()
+
+    await service.reconcile()
+
+    stored = await service.get(job.id)
+    assert stored is not None and stored.result is not None
+    assert stored.result.image_base64 == "aGVsbG8="
+    assert stored.result.image_path is None
+
+
+async def test_a_store_failure_leaves_the_job_unresolved_for_a_retry(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+) -> None:
+    """A full disk must not complete the job without its image, nor fail it:
+    upstream still holds the result, so the next tick can try again."""
+    store = FakeImageStore(save_raises=RuntimeError("disk full"))
+    service = stored_service(repository, runpod, guardrail, clock, store)
+    job = (await service.submit(PARAMS, ctx())).job
+    runpod.next_status = completed()
+
+    await service.reconcile()
+    interim = await service.get(job.id)
+
+    store.save_raises = None
+    await service.reconcile()
+    resolved = await service.get(job.id)
+
+    assert interim is not None and not interim.status.terminal
+    assert resolved is not None and resolved.status is JobStatus.COMPLETED
+    assert resolved.result is not None and resolved.result.image_path is not None

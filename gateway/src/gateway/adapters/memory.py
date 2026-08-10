@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from gateway.core.metrics import CompletedTiming, hour_floor
 from gateway.core.models import (
     ErrorCode,
     Job,
@@ -276,12 +277,119 @@ class InMemoryJobRepository:
             if job.context.api_key_id == api_key_id and not job.status.terminal
         )
 
+    async def list_recent(self, api_key_id: str, limit: int) -> list[Job]:
+        """List one caller's jobs, newest first.
+
+        Ties on `created_at` (same-instant inserts under a frozen clock) break
+        on insertion order, newest first, so the ordering is still total.
+
+        Args:
+            api_key_id: The caller whose jobs are listed.
+            limit: Maximum jobs to return.
+
+        Returns:
+            Up to `limit` jobs, newest `created_at` first.
+        """
+        mine = [
+            (index, job)
+            for index, job in enumerate(self._jobs.values())
+            if job.context.api_key_id == api_key_id
+        ]
+        mine.sort(key=lambda pair: (pair[1].created_at, pair[0]), reverse=True)
+        return [job for _, job in mine[: max(limit, 0)]]
+
+    async def count_by_status(self, api_key_id: str) -> dict[JobStatus, int]:
+        """Count one caller's jobs per status, every status zero-filled.
+
+        Args:
+            api_key_id: The caller whose jobs are counted.
+
+        Returns:
+            A count for every `JobStatus`, zero where the caller has none.
+        """
+        counts = dict.fromkeys(JobStatus, 0)
+        for job in self._jobs.values():
+            if job.context.api_key_id == api_key_id:
+                counts[job.status] += 1
+        return counts
+
+    async def count_created_since(self, api_key_id: str, since: datetime) -> int:
+        """Count one caller's jobs created at or after an instant.
+
+        Args:
+            api_key_id: The caller whose jobs are counted.
+            since: Inclusive lower bound on `created_at`.
+
+        Returns:
+            How many of the caller's jobs were created in the interval.
+        """
+        return sum(
+            1
+            for job in self._jobs.values()
+            if job.context.api_key_id == api_key_id and job.created_at >= since
+        )
+
+    async def recent_completed_timings(
+        self, api_key_id: str, limit: int
+    ) -> list[CompletedTiming]:
+        """Fetch timings of the caller's most recently completed jobs.
+
+        Args:
+            api_key_id: The caller whose completions are read.
+            limit: Maximum timings to return.
+
+        Returns:
+            Up to `limit` timings, newest `completed_at` first.
+        """
+        timings = [
+            CompletedTiming(
+                created_at=job.created_at,
+                completed_at=job.completed_at,
+                inference_seconds=job.result.inference_seconds,
+            )
+            for job in self._jobs.values()
+            if job.context.api_key_id == api_key_id
+            and job.status is JobStatus.COMPLETED
+            and job.completed_at is not None
+            and job.result is not None
+        ]
+        timings.sort(key=lambda timing: timing.completed_at, reverse=True)
+        return timings[: max(limit, 0)]
+
+    async def count_completed_by_hour(
+        self, api_key_id: str, since: datetime
+    ) -> dict[datetime, int]:
+        """Count the caller's completions per UTC hour.
+
+        Args:
+            api_key_id: The caller whose completions are counted.
+            since: Inclusive lower bound on `completed_at`.
+
+        Returns:
+            Completions keyed by UTC hour start; hours with none are absent.
+        """
+        counts: dict[datetime, int] = {}
+        for job in self._jobs.values():
+            if (
+                job.context.api_key_id == api_key_id
+                and job.status is JobStatus.COMPLETED
+                and job.completed_at is not None
+                and job.completed_at >= since
+            ):
+                hour = hour_floor(job.completed_at)
+                counts[hour] = counts.get(hour, 0) + 1
+        return counts
+
     async def _update(self, job_id: UUID, **changes: object) -> Job:
         async with self._lock:
             job = self._jobs[job_id]
             if job.status.terminal:
                 return job
             updated = job.advanced(updated_at=self.clock.now(), **changes)
+            # A preview frame is transient telemetry; the terminal row keeps
+            # the step counters but never the frame.
+            if updated.status.terminal and updated.progress is not None:
+                updated = updated.advanced(progress=updated.progress.without_preview())
             self._jobs[job_id] = updated
             return updated
 

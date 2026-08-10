@@ -10,6 +10,10 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "structlog>=24.4",
+    "asyncpg>=0.31.0",
+    "alembic>=1.19.1",
+    "pillow>=12.3.0",
+    "greenlet>=3.5.4",
 ]
 
 [dependency-groups]
@@ -22,6 +26,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.11",
     "import-linter>=2.1",
+    "asyncpg-stubs>=0.31.3",
 ]
 
 [build-system]
@@ -67,7 +72,10 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 addopts = "-m 'not gpu' --strict-markers"
-markers = ["gpu: requires a live GPU or deployed endpoint"]
+markers = [
+    "gpu: requires a live GPU or deployed endpoint",
+    "postgres: contract run against the Postgres named by DATABASE_URL_TEST; skips itself when unset",
+]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
@@ -93,4 +101,8 @@ forbidden_modules = [
     "fastapi",
     "httpx",
     "uvicorn",
+    "asyncpg",
+    "alembic",
+    "sqlalchemy",
+    "PIL",
 ]

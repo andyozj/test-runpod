@@ -12,7 +12,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway import main
+from gateway.adapters.images import FilesystemImageStore
 from gateway.adapters.memory import InMemoryJobRepository
+from gateway.adapters.postgres import PostgresJobRepository
+from gateway.adapters.ratelimit import TokenBucketRateLimiter
 from gateway.adapters.runpod_client import submit_envelope_s
 from gateway.core.service import JobService
 from gateway.main import (
@@ -22,8 +25,7 @@ from gateway.main import (
     submit_grace_s,
 )
 from gateway.settings import Settings
-from tests.conftest import FrozenClock
-from tests.unit.test_memory import make_job
+from tests.conftest import FrozenClock, make_job
 
 
 def _settings() -> Settings:
@@ -123,4 +125,68 @@ def test_openapi_schema_is_generated() -> None:
         schema = client.get("/openapi.json").json()
 
     assert "/v1/jobs" in schema["paths"]
+    assert "/v1/jobs/{job_id}/image" in schema["paths"]
     assert "/health" in schema["paths"]
+
+
+def _captured_service_kwargs(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> dict[str, Any]:
+    """Build the app while recording what the service was wired with.
+
+    Building never touches the database — migrations and the pool live in the
+    lifespan — so a Postgres binding is assertable without a server.
+    """
+    captured: dict[str, Any] = {}
+    real = main.JobService
+
+    def record(**kwargs: Any) -> JobService:
+        captured.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(main, "JobService", record)
+    build(settings)
+    return captured
+
+
+def test_the_rate_limiter_is_wired_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    settings.gateway_rate_limit_rpm = 7
+    settings.gateway_rate_limit_burst = 3
+
+    captured = _captured_service_kwargs(monkeypatch, settings)
+
+    limiter = captured["rate_limiter"]
+    assert isinstance(limiter, TokenBucketRateLimiter)
+    assert limiter.rpm == 7
+    assert limiter.burst == 3
+
+
+def test_no_database_url_binds_memory_and_no_image_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _captured_service_kwargs(monkeypatch, _settings())
+
+    assert isinstance(captured["repository"], InMemoryJobRepository)
+    assert captured["image_store"] is None
+
+
+def test_a_database_url_binds_postgres_and_the_filesystem_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    settings = _settings()
+    settings.database_url = "postgresql://gateway:secret@localhost:5432/gateway"
+    settings.gateway_image_dir = str(tmp_path / "images")
+    settings.gateway_image_store_max_bytes = 1234
+
+    captured = _captured_service_kwargs(monkeypatch, settings)
+
+    repository = captured["repository"]
+    store = captured["image_store"]
+    assert isinstance(repository, PostgresJobRepository)
+    assert repository.dsn == settings.database_url
+    assert isinstance(store, FilesystemImageStore)
+    assert str(store.root) == settings.gateway_image_dir
+    assert store.max_bytes == 1234

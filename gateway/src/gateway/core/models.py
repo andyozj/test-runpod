@@ -171,14 +171,20 @@ class GenerationParams:
 class JobResult:
     """What the worker produced.
 
+    `image_base64` and `image_path` are alternatives: the worker reports the
+    former, and when an image store is bound the service moves the bytes to
+    disk and keeps only the path and a ThumbHash on the row.
+
     Attributes:
-        image_base64: The encoded image.
+        image_base64: The encoded image, until it is offloaded to a store.
         format: Image encoding.
         seed: The seed actually used.
         width: Rendered width.
         height: Rendered height.
         model_version: Repository and revision that produced this.
         inference_seconds: Wall-clock generation time.
+        image_path: Store-relative file location, once offloaded.
+        thumbhash: Base64 ThumbHash placeholder, computed at save time.
     """
 
     image_base64: str | None
@@ -188,6 +194,8 @@ class JobResult:
     height: int
     model_version: str
     inference_seconds: float
+    image_path: str | None = None
+    thumbhash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -198,11 +206,27 @@ class Progress:
         step: Completed steps.
         total: Total steps.
         percent: Convenience percentage.
+        preview_b64: Base64 latent-preview frame for this stride, when the
+            worker attached one. Transient telemetry: never persisted on a
+            terminal job, where the final image supersedes it.
+        preview_format: Encoding of the preview frame, `jpeg` today.
     """
 
     step: int
     total: int
     percent: int
+    preview_b64: str | None = None
+    preview_format: str | None = None
+
+    def without_preview(self) -> Progress:
+        """Return this progress with any preview frame dropped.
+
+        Returns:
+            Self when no preview is attached, else a stripped copy.
+        """
+        if self.preview_b64 is None and self.preview_format is None:
+            return self
+        return Progress(step=self.step, total=self.total, percent=self.percent)
 
 
 @dataclass(frozen=True)

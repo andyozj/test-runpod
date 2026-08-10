@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
+from gateway.core.metrics import CompletedTiming
 from gateway.core.models import (
     ErrorCode,
     GenerationParams,
@@ -77,6 +78,81 @@ class EndpointHealth:
             3
         """
         return max(self.workers_running + self.workers_idle, 1)
+
+
+@dataclass(frozen=True)
+class StoredImage:
+    """Where a decoded image landed, and its placeholder.
+
+    Attributes:
+        path: Store-relative location, kept on the job row.
+        thumbhash: Base64 ThumbHash (~25 bytes) computed from the decoded
+            pixels, enough to render a placeholder without the file.
+    """
+
+    path: str
+    thumbhash: str
+
+
+@dataclass(frozen=True)
+class RateLimitDecision:
+    """Whether one request may proceed, and if not, when to retry.
+
+    Attributes:
+        allowed: True when a token was taken and the request may proceed.
+        retry_after_s: Seconds until a token will be available, ceiled and
+            floored at one. Zero when `allowed`.
+    """
+
+    allowed: bool
+    retry_after_s: int
+
+
+@runtime_checkable
+class RateLimiter(Protocol):
+    """A per-caller request budget, consulted once per first-attempt submit."""
+
+    def acquire(self, api_key_id: str) -> RateLimitDecision:
+        """Spend one token from the caller's budget, if one exists.
+
+        Args:
+            api_key_id: The caller's identity; each caller has its own budget.
+
+        Returns:
+            The decision, carrying the wait when the budget is exhausted.
+        """
+        ...
+
+
+@runtime_checkable
+class ImageStore(Protocol):
+    """File storage for decoded result images, so they leave the job row."""
+
+    async def save(
+        self, job_id: UUID, image_base64: str, image_format: str
+    ) -> StoredImage:
+        """Decode and persist one result image.
+
+        Args:
+            job_id: The owning job; names the file.
+            image_base64: The worker's encoded image.
+            image_format: `png` or `jpeg`; names the extension.
+
+        Returns:
+            The stored location and its ThumbHash.
+        """
+        ...
+
+    async def load(self, path: str) -> bytes | None:
+        """Read a stored image back.
+
+        Args:
+            path: The store-relative path from `StoredImage.path`.
+
+        Returns:
+            The image bytes, or None when the file has been evicted.
+        """
+        ...
 
 
 @runtime_checkable
@@ -222,6 +298,72 @@ class JobRepository(Protocol):
         """
         ...
 
+    async def list_recent(self, api_key_id: str, limit: int) -> list[Job]:
+        """List one caller's jobs, newest first.
+
+        Args:
+            api_key_id: The caller whose jobs are listed.
+            limit: Maximum jobs to return.
+
+        Returns:
+            Up to `limit` jobs, newest `created_at` first.
+        """
+        ...
+
+    async def count_by_status(self, api_key_id: str) -> dict[JobStatus, int]:
+        """Count one caller's jobs per status, over everything in the store.
+
+        Args:
+            api_key_id: The caller whose jobs are counted.
+
+        Returns:
+            A count for every `JobStatus`, zero where the caller has none.
+        """
+        ...
+
+    async def count_created_since(self, api_key_id: str, since: datetime) -> int:
+        """Count one caller's jobs created at or after an instant.
+
+        Args:
+            api_key_id: The caller whose jobs are counted.
+            since: Inclusive lower bound on `created_at`.
+
+        Returns:
+            How many of the caller's jobs were created in the interval.
+        """
+        ...
+
+    async def recent_completed_timings(
+        self, api_key_id: str, limit: int
+    ) -> list[CompletedTiming]:
+        """Fetch timings of the caller's most recently completed jobs.
+
+        Timings only, never full rows: the metrics window needs three numbers
+        per job, and a completed row carries a multi-MB result.
+
+        Args:
+            api_key_id: The caller whose completions are read.
+            limit: Maximum timings to return.
+
+        Returns:
+            Up to `limit` timings, newest `completed_at` first.
+        """
+        ...
+
+    async def count_completed_by_hour(
+        self, api_key_id: str, since: datetime
+    ) -> dict[datetime, int]:
+        """Count the caller's completions per UTC hour.
+
+        Args:
+            api_key_id: The caller whose completions are counted.
+            since: Inclusive lower bound on `completed_at`.
+
+        Returns:
+            Completions keyed by UTC hour start; hours with none are absent.
+        """
+        ...
+
 
 @runtime_checkable
 class RunPodClient(Protocol):
@@ -318,13 +460,18 @@ class Clock(Protocol):
 
 __all__ = [
     "Clock",
+    "CompletedTiming",
     "EndpointHealth",
     "GenerationParams",
     "GuardrailVerdict",
     "IdempotencyConflictError",
+    "ImageStore",
     "JobRepository",
     "PromptGuardrail",
+    "RateLimitDecision",
+    "RateLimiter",
     "RunPodClient",
     "RunPodJobStatus",
+    "StoredImage",
     "UpstreamUnavailableError",
 ]

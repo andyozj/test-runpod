@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import structlog
 from fastapi import FastAPI
 
 from gateway.adapters.guardrails import BlocklistGuardrail
+from gateway.adapters.images import FilesystemImageStore
 from gateway.adapters.memory import InMemoryJobRepository, SystemClock
+from gateway.adapters.postgres import PostgresJobRepository
+from gateway.adapters.ratelimit import TokenBucketRateLimiter
 from gateway.adapters.runpod_client import HttpRunPodClient, submit_envelope_s
+from gateway.adapters.schema import upgrade_to_head
 from gateway.api.app import Deps, create_app
 from gateway.core.service import JobService
 from gateway.settings import Settings, get_settings
@@ -65,8 +71,10 @@ def build(settings: Settings | None = None) -> FastAPI:
     """Assemble the application from concrete implementations.
 
     This is the only module that names both a protocol and an implementation.
-    Swapping `InMemoryJobRepository` for the Postgres one is a change here and
-    nowhere else.
+    `DATABASE_URL` picks the persistence pair: set, jobs live in Postgres and
+    completed images on disk; unset, both stay in memory and results keep
+    their inline base64. Migrations run and the pool opens inside the
+    lifespan, so building the app touches no database.
 
     Args:
         settings: Override for configuration. Tests only.
@@ -79,8 +87,18 @@ def build(settings: Settings | None = None) -> FastAPI:
 
     clock = SystemClock()
     http = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
+
+    postgres: PostgresJobRepository | None = None
+    image_store: FilesystemImageStore | None = None
+    if settings.database_url:
+        postgres = PostgresJobRepository(dsn=settings.database_url, clock=clock)
+        image_store = FilesystemImageStore(
+            root=Path(settings.gateway_image_dir),
+            max_bytes=settings.gateway_image_store_max_bytes,
+        )
+
     service = JobService(
-        repository=InMemoryJobRepository(clock=clock),
+        repository=postgres or InMemoryJobRepository(clock=clock),
         runpod=HttpRunPodClient(
             endpoint_id=settings.runpod_endpoint_id,
             api_key=settings.runpod_api_key,
@@ -89,12 +107,20 @@ def build(settings: Settings | None = None) -> FastAPI:
         ),
         guardrail=BlocklistGuardrail.from_contract(),
         clock=clock,
+        image_store=image_store,
+        rate_limiter=TokenBucketRateLimiter(
+            clock=clock,
+            rpm=settings.gateway_rate_limit_rpm,
+            burst=settings.gateway_rate_limit_burst,
+        ),
         job_deadline_s=settings.job_deadline_s,
         max_queue_wait_s=settings.max_queue_wait_s,
         avg_job_s=settings.avg_job_s,
         submit_grace_s=submit_grace_s(settings),
         health_max_age_s=settings.health_max_age_s,
         max_active_jobs_per_key=settings.max_active_jobs_per_key,
+        metrics_window=settings.gateway_metrics_window,
+        gpu_rate_usd_hr=settings.gateway_gpu_rate_usd_hr,
     )
     reconciler = Reconciler(
         service=service,
@@ -105,14 +131,22 @@ def build(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan() -> AsyncIterator[None]:
+        if postgres is not None:
+            # `upgrade_to_head` calls `asyncio.run` internally; a thread keeps
+            # it off this event loop.
+            await asyncio.to_thread(upgrade_to_head, postgres.dsn)
+            await postgres.connect()
         async with reconciler.running():
             yield
         await http.aclose()
+        if postgres is not None:
+            await postgres.close()
 
     return create_app(
         Deps(
             service=service,
             settings=settings,
+            image_store=image_store,
             reconciler_age=lambda: reconciler.seconds_since_last_run,
         ),
         on_startup=lifespan,

@@ -6,6 +6,10 @@ import pytest
 import structlog.testing
 from pydantic import ValidationError
 
+from gateway.adapters.ratelimit import (
+    DEFAULT_RATE_LIMIT_BURST,
+    DEFAULT_RATE_LIMIT_RPM,
+)
 from gateway.core.service import JobService
 from gateway.settings import Settings
 
@@ -27,6 +31,19 @@ def test_settings_default_to_the_service_constants(name: str) -> None:
     settings = Settings(gateway_api_keys="demo:secret")
 
     assert getattr(settings, name) == JobService.__dataclass_fields__[name].default
+
+
+def test_rate_limit_settings_default_to_the_limiter_constants() -> None:
+    settings = Settings(gateway_api_keys="demo:secret")
+
+    assert settings.gateway_rate_limit_rpm == DEFAULT_RATE_LIMIT_RPM
+    assert settings.gateway_rate_limit_burst == DEFAULT_RATE_LIMIT_BURST
+
+
+def test_a_zero_rate_limit_fails_at_startup() -> None:
+    """rpm=0 is a divide-by-zero at request time; refuse it at parse time."""
+    with pytest.raises(ValidationError):
+        Settings(gateway_api_keys="demo:secret", gateway_rate_limit_rpm=0)
 
 
 def test_missing_gateway_api_keys_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -10,7 +12,16 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -19,23 +30,50 @@ from gateway.api.schemas import (
     ErrorResponse,
     GenerationRequest,
     JobCreated,
+    JobList,
+    JobSummary,
     JobView,
+    MetricsView,
+    QueueHealthView,
+    ReconcilerView,
+    UpstreamView,
 )
-from gateway.core.models import ErrorCode, GenerationParams, RequestContext
-from gateway.core.protocols import IdempotencyConflictError, UpstreamUnavailableError
+from gateway.core.models import ErrorCode, GenerationParams, Job, RequestContext
+from gateway.core.protocols import (
+    IdempotencyConflictError,
+    ImageStore,
+    UpstreamUnavailableError,
+)
 from gateway.core.service import (
     ActiveJobLimitError,
     JobService,
     QueueSaturatedError,
+    RateLimitedError,
     Submission,
 )
 from gateway.settings import Settings
 
 logger = structlog.get_logger()
 
-# A reconciler tick normally lands every 2-10s; three idle intervals of
-# silence means the loop is dead, not slow.
-RECONCILER_STALL_S = 30.0
+# A tick normally lands every `reconcile_interval_s` to
+# `reconcile_idle_interval_s`; this many idle intervals of silence means the
+# loop is dead, not slow.
+RECONCILER_STALL_INTERVALS = 3
+
+
+def reconciler_stall_s(settings: Settings) -> float:
+    """Silence after which the reconciler is treated as stalled.
+
+    Derived from the configured idle interval rather than fixed, so slowing
+    the loop down does not turn every reading into a false stall.
+
+    Args:
+        settings: Runtime configuration.
+
+    Returns:
+        The threshold in seconds (30.0 with the default 10s idle interval).
+    """
+    return settings.reconcile_idle_interval_s * RECONCILER_STALL_INTERVALS
 
 
 @dataclass
@@ -45,12 +83,15 @@ class Deps:
     Attributes:
         service: The domain service.
         settings: Runtime configuration.
+        image_store: Where offloaded result images are read from. None in
+            memory mode, where results stay inline on the job.
         reconciler_age: Seconds since the reconciler last completed a tick,
             None before its first run. Absent outside the composition root.
     """
 
     service: JobService
     settings: Settings
+    image_store: ImageStore | None = None
     reconciler_age: Callable[[], float | None] | None = None
 
 
@@ -68,9 +109,10 @@ def _error(
 def _shed(message: str, retry_after_s: int, correlation_id: str) -> HTTPException:
     """A 429 telling the caller to retry later.
 
-    Shared by queue saturation and the per-key active job cap: both are
-    QUEUE_SATURATED to the caller — "shed this request, try again shortly" —
-    and there is no more specific code in the contract for the cap.
+    Shared by queue saturation, the per-key active job cap and the per-key
+    request rate limit: all three are QUEUE_SATURATED to the caller — "shed
+    this request, try again shortly" — and the contract has no more specific
+    code for the cap or the limit (no RATE_LIMITED exists).
 
     Args:
         message: Caller-facing description of what was shed.
@@ -127,8 +169,8 @@ async def _submit(
     """Submit through the service, translating domain errors to HTTP ones.
 
     Split out of the route handler because inlining it pushed `build_router`
-    past the complexity budget — the four error branches belong to the
-    submit step, not to routing.
+    past the complexity budget — the error branches belong to the submit
+    step, not to routing.
 
     Args:
         service: The domain service.
@@ -154,6 +196,10 @@ async def _submit(
             ).model_dump(),
             headers={"Retry-After": "5"},
         ) from exc
+    except RateLimitedError as exc:
+        raise _shed(
+            "Too many requests for this key.", exc.retry_after_s, ctx.correlation_id
+        ) from exc
     except QueueSaturatedError as exc:
         raise _shed(
             "The endpoint queue is saturated.", exc.retry_after_s, ctx.correlation_id
@@ -173,6 +219,111 @@ async def _submit(
         ) from exc
 
 
+def _not_found(job_id: UUID) -> HTTPException:
+    return _error(
+        status.HTTP_404_NOT_FOUND,
+        ErrorCode.JOB_NOT_FOUND,
+        f"No job with id {job_id}.",
+    )
+
+
+async def _image_bytes(job: Job, store: ImageStore | None) -> tuple[bytes, str]:
+    """Fetch a job's image bytes, wherever they live.
+
+    Args:
+        job: The owner-checked job.
+        store: The bound image store, if any.
+
+    Returns:
+        The image bytes and their format.
+
+    Raises:
+        HTTPException: 404 when the job never produced an image, 410 when it
+            did and the file has since been evicted.
+    """
+    result = job.result
+    if result is None:
+        raise _error(
+            status.HTTP_404_NOT_FOUND,
+            ErrorCode.JOB_NOT_FOUND,
+            f"Job {job.id} has no image.",
+        )
+    if result.image_path is not None and store is not None:
+        data = await store.load(result.image_path)
+        if data is not None:
+            return data, result.format
+    elif result.image_base64 is not None:
+        try:
+            return base64.b64decode(result.image_base64), result.format
+        except binascii.Error:
+            logger.warning("stored_image_undecodable", job_id=str(job.id))
+    # There is no GONE code in the error contract; JOB_NOT_FOUND plus the 410
+    # status carries the distinction.
+    raise _error(
+        status.HTTP_410_GONE,
+        ErrorCode.JOB_NOT_FOUND,
+        f"The image for job {job.id} was evicted from the store.",
+        "The job's metadata and seed remain; rerun the seed to regenerate it.",
+    )
+
+
+def _upstream_view(deps: Deps) -> UpstreamView:
+    """Assemble the shared topology block, mirroring `/health/detailed`.
+
+    Args:
+        deps: The assembled dependencies.
+
+    Returns:
+        Queue health with its staleness, plus reconciler liveness. Both carry
+        the gateway's own stale/fresh verdict and the threshold behind it, so
+        no caller has to invent a cutoff.
+    """
+    return UpstreamView(
+        queue=QueueHealthView.of(
+            deps.service.endpoint_health,
+            deps.service.endpoint_health_age_s,
+            stale_after_s=deps.service.health_max_age_s,
+        ),
+        reconciler=ReconcilerView.of(
+            deps.reconciler_age() if deps.reconciler_age else None,
+            stale_after_s=reconciler_stall_s(deps.settings),
+        ),
+    )
+
+
+def _register_metrics(router: APIRouter, deps: Deps) -> None:
+    """Register the metrics route.
+
+    Split out of `build_router` for the same reason as `_submit`: the extra
+    nested handler pushed it past the complexity budget.
+
+    Args:
+        router: The versioned router.
+        deps: The assembled dependencies.
+    """
+
+    @router.get("/metrics")
+    async def get_metrics(
+        authorization: str | None = Header(default=None),
+    ) -> MetricsView:
+        """Serve the Operate dashboard's aggregates.
+
+        Job counts, latency percentiles, throughput and cost are per-key —
+        the caller sees only its own jobs, consistent with the job routes.
+        The upstream block is shared topology, the same reading
+        `/health/detailed` reports and equally behind auth.
+
+        Args:
+            authorization: Bearer credential.
+
+        Returns:
+            The caller's aggregates plus the shared upstream readings.
+        """
+        key_id = authenticate(deps.settings, authorization)
+        snapshot = await deps.service.metrics(key_id)
+        return MetricsView.of(snapshot, _upstream_view(deps))
+
+
 def build_router(deps: Deps) -> APIRouter:
     """Create the versioned routes bound to a set of dependencies.
 
@@ -183,6 +334,7 @@ def build_router(deps: Deps) -> APIRouter:
         The router.
     """
     router = APIRouter(prefix="/v1")
+    _register_metrics(router, deps)
 
     def _authenticate(authorization: str | None) -> str:
         return authenticate(deps.settings, authorization)
@@ -245,12 +397,49 @@ def build_router(deps: Deps) -> APIRouter:
         # Another caller's job answers 404, not 403: confirming the id exists
         # is itself a leak.
         if job is None or job.context.api_key_id != key_id:
-            raise _error(
-                status.HTTP_404_NOT_FOUND,
-                ErrorCode.JOB_NOT_FOUND,
-                f"No job with id {job_id}.",
-            )
+            raise _not_found(job_id)
         return JobView.of(job)
+
+    @router.get("/jobs")
+    async def list_jobs(
+        authorization: str | None = Header(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> JobList:
+        """List the caller's jobs, newest first: the gallery feed.
+
+        Metadata only — thumbhash and image URL included, image bytes never.
+
+        Args:
+            authorization: Bearer credential.
+            limit: Maximum jobs to return.
+
+        Returns:
+            Up to `limit` of the caller's own jobs.
+        """
+        key_id = _authenticate(authorization)
+        jobs = await deps.service.list_jobs(key_id, limit)
+        return JobList(jobs=[JobSummary.of(job) for job in jobs])
+
+    @router.get("/jobs/{job_id}/image")
+    async def get_job_image(
+        job_id: UUID, authorization: str | None = Header(default=None)
+    ) -> Response:
+        """Serve a job's image.
+
+        Args:
+            job_id: The job whose image is fetched.
+            authorization: Bearer credential.
+
+        Returns:
+            The image bytes with their content type. 404 for another caller's
+            or an image-less job, 410 once the file has been evicted.
+        """
+        key_id = _authenticate(authorization)
+        job = await deps.service.get(job_id)
+        if job is None or job.context.api_key_id != key_id:
+            raise _not_found(job_id)
+        data, image_format = await _image_bytes(job, deps.image_store)
+        return Response(content=data, media_type=f"image/{image_format}")
 
     @router.post("/jobs/{job_id}/cancel")
     async def cancel_job(
@@ -272,18 +461,10 @@ def build_router(deps: Deps) -> APIRouter:
         key_id = _authenticate(authorization)
         existing = await deps.service.get(job_id)
         if existing is None or existing.context.api_key_id != key_id:
-            raise _error(
-                status.HTTP_404_NOT_FOUND,
-                ErrorCode.JOB_NOT_FOUND,
-                f"No job with id {job_id}.",
-            )
+            raise _not_found(job_id)
         job = await deps.service.cancel(job_id)
         if job is None:
-            raise _error(
-                status.HTTP_404_NOT_FOUND,
-                ErrorCode.JOB_NOT_FOUND,
-                f"No job with id {job_id}.",
-            )
+            raise _not_found(job_id)
         return JobView.of(job)
 
     return router
@@ -392,7 +573,7 @@ def create_app(
         authenticate(deps.settings, authorization)
         upstream = deps.service.endpoint_health
         age = deps.reconciler_age() if deps.reconciler_age else None
-        stalled = age is not None and age > RECONCILER_STALL_S
+        stalled = age is not None and age > reconciler_stall_s(deps.settings)
         return {
             "status": "ok" if upstream and not stalled else "degraded",
             "version": deps.settings.version,

@@ -10,12 +10,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway.adapters.memory import InMemoryJobRepository
-from gateway.api.app import RECONCILER_STALL_S, Deps, create_app
+from gateway.adapters.ratelimit import TokenBucketRateLimiter
+from gateway.api.app import Deps, create_app, reconciler_stall_s
 from gateway.core.protocols import EndpointHealth, UpstreamUnavailableError
 from gateway.core.service import JobService
 from gateway.settings import Settings
 from tests.conftest import (
     FakeGuardrail,
+    FakeImageStore,
     FakeRunPodClient,
     FrozenClock,
     Verdict,
@@ -231,6 +233,59 @@ def test_active_job_cap_is_429_with_retry_after(
     assert response.headers["Retry-After"]
 
 
+def test_rate_limited_submission_is_429_with_retry_after(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+    settings: Settings,
+) -> None:
+    limited = JobService(
+        repository=repository,
+        runpod=runpod,
+        guardrail=guardrail,
+        clock=clock,
+        rate_limiter=TokenBucketRateLimiter(clock=clock, rpm=30, burst=1),
+    )
+    client = TestClient(create_app(Deps(service=limited, settings=settings)))
+    first = client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH)
+
+    response = client.post("/v1/jobs", json={"prompt": "a second fox"}, headers=AUTH)
+
+    assert first.status_code == 202
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "QUEUE_SATURATED"
+    assert response.json()["error"]["correlation_id"]
+    assert response.headers["Retry-After"] == "2"  # one token at 30 rpm
+
+
+def test_rate_limit_does_not_apply_to_polling_gets(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+    settings: Settings,
+) -> None:
+    """Polling is the designed usage pattern; only submission spends tokens."""
+    limited = JobService(
+        repository=repository,
+        runpod=runpod,
+        guardrail=guardrail,
+        clock=clock,
+        rate_limiter=TokenBucketRateLimiter(clock=clock, rpm=30, burst=1),
+    )
+    client = TestClient(create_app(Deps(service=limited, settings=settings)))
+    job_id = client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH).json()[
+        "job_id"
+    ]
+
+    polls = [client.get(f"/v1/jobs/{job_id}", headers=AUTH) for _ in range(20)]
+    listing = client.get("/v1/jobs", headers=AUTH)
+
+    assert all(poll.status_code == 200 for poll in polls)
+    assert listing.status_code == 200
+
+
 # --- Load shedding and upstream failure, as the caller sees them ---
 
 
@@ -417,7 +472,7 @@ async def test_a_stalled_reconciler_degrades_detailed_health(
 ) -> None:
     """A dead loop leaves the process healthy and every job unresolvable."""
     await service.reconcile()
-    age = RECONCILER_STALL_S + 1
+    age = reconciler_stall_s(settings) + 1
 
     body = detailed({"reconciler_age": lambda: age}, service, settings)
 
@@ -431,7 +486,9 @@ async def test_an_age_at_the_stall_threshold_is_still_ok(
 ) -> None:
     await service.reconcile()
 
-    body = detailed({"reconciler_age": lambda: RECONCILER_STALL_S}, service, settings)
+    threshold = reconciler_stall_s(settings)
+
+    body = detailed({"reconciler_age": lambda: threshold}, service, settings)
 
     assert body["status"] == "ok"
     assert body["checks"]["reconciler"]["status"] == "ok"
@@ -447,3 +504,339 @@ async def test_an_unreachable_endpoint_degrades_detailed_health(
 
     assert body["status"] == "degraded"
     assert body["checks"]["runpod"]["status"] == "unknown"
+
+
+# --- Gallery listing and image serving ---
+
+
+@pytest.fixture
+def image_store() -> FakeImageStore:
+    return FakeImageStore()
+
+
+@pytest.fixture
+def stored_service(
+    repository: InMemoryJobRepository,
+    runpod: FakeRunPodClient,
+    guardrail: FakeGuardrail,
+    clock: FrozenClock,
+    image_store: FakeImageStore,
+) -> JobService:
+    return JobService(
+        repository=repository,
+        runpod=runpod,
+        guardrail=guardrail,
+        clock=clock,
+        image_store=image_store,
+    )
+
+
+@pytest.fixture
+def stored_client(
+    stored_service: JobService, settings: Settings, image_store: FakeImageStore
+) -> TestClient:
+    return TestClient(
+        create_app(
+            Deps(service=stored_service, settings=settings, image_store=image_store)
+        )
+    )
+
+
+async def submit_and_complete(
+    client: TestClient,
+    service: JobService,
+    runpod: FakeRunPodClient,
+    prompt: str = "a red fox",
+) -> str:
+    created = client.post("/v1/jobs", json={"prompt": prompt}, headers=AUTH)
+    runpod.next_status = completed(seed=7)
+    await service.reconcile()
+    job_id: str = created.json()["job_id"]
+    return job_id
+
+
+async def test_the_listing_is_newest_first_metadata_only(
+    stored_client: TestClient,
+    stored_service: JobService,
+    runpod: FakeRunPodClient,
+    clock: FrozenClock,
+) -> None:
+    first = await submit_and_complete(stored_client, stored_service, runpod, "one")
+    clock.advance(10)
+    second = await submit_and_complete(stored_client, stored_service, runpod, "two")
+
+    response = stored_client.get("/v1/jobs", headers=AUTH)
+
+    jobs = response.json()["jobs"]
+    assert [job["job_id"] for job in jobs] == [second, first]
+    newest = jobs[0]
+    assert newest["thumbhash"]
+    assert newest["seed"] == 7
+    assert newest["image_url"] == f"/v1/jobs/{second}/image"
+    assert "image_base64" not in newest
+
+
+def test_the_listing_is_scoped_to_the_caller(stored_client: TestClient) -> None:
+    stored_client.post("/v1/jobs", json={"prompt": "mine"}, headers=AUTH)
+
+    response = stored_client.get("/v1/jobs", headers=OTHER_AUTH)
+
+    assert response.json()["jobs"] == []
+
+
+async def test_the_listing_honours_the_limit(
+    stored_client: TestClient,
+    stored_service: JobService,
+    runpod: FakeRunPodClient,
+    clock: FrozenClock,
+) -> None:
+    await submit_and_complete(stored_client, stored_service, runpod, "one")
+    clock.advance(10)
+    newest = await submit_and_complete(stored_client, stored_service, runpod, "two")
+
+    response = stored_client.get("/v1/jobs?limit=1", headers=AUTH)
+
+    assert [job["job_id"] for job in response.json()["jobs"]] == [newest]
+
+
+def test_a_zero_limit_is_rejected_with_the_envelope(stored_client: TestClient) -> None:
+    response = stored_client.get("/v1/jobs?limit=0", headers=AUTH)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"].startswith("limit")
+
+
+def test_the_listing_requires_a_credential(stored_client: TestClient) -> None:
+    assert stored_client.get("/v1/jobs").status_code == 401
+
+
+async def test_a_stored_job_view_carries_a_url_not_bytes(
+    stored_client: TestClient, stored_service: JobService, runpod: FakeRunPodClient
+) -> None:
+    job_id = await submit_and_complete(stored_client, stored_service, runpod)
+
+    result = stored_client.get(f"/v1/jobs/{job_id}", headers=AUTH).json()["result"]
+
+    assert result["image_url"] == f"/v1/jobs/{job_id}/image"
+    assert result["thumbhash"]
+    assert "image_base64" not in result
+
+
+async def test_the_image_route_serves_the_stored_bytes(
+    stored_client: TestClient, stored_service: JobService, runpod: FakeRunPodClient
+) -> None:
+    job_id = await submit_and_complete(stored_client, stored_service, runpod)
+
+    response = stored_client.get(f"/v1/jobs/{job_id}/image", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content == b"hello"
+
+
+async def test_another_callers_image_is_404(
+    stored_client: TestClient, stored_service: JobService, runpod: FakeRunPodClient
+) -> None:
+    job_id = await submit_and_complete(stored_client, stored_service, runpod)
+
+    response = stored_client.get(f"/v1/jobs/{job_id}/image", headers=OTHER_AUTH)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "JOB_NOT_FOUND"
+
+
+def test_an_unknown_jobs_image_is_404(stored_client: TestClient) -> None:
+    assert (
+        stored_client.get(f"/v1/jobs/{UNKNOWN_ID}/image", headers=AUTH).status_code
+        == 404
+    )
+
+
+def test_a_job_without_a_result_has_no_image_yet(stored_client: TestClient) -> None:
+    created = stored_client.post("/v1/jobs", json={"prompt": "x"}, headers=AUTH)
+
+    response = stored_client.get(
+        f"/v1/jobs/{created.json()['job_id']}/image", headers=AUTH
+    )
+
+    assert response.status_code == 404
+
+
+async def test_an_evicted_image_is_410_and_the_metadata_survives(
+    stored_client: TestClient,
+    stored_service: JobService,
+    runpod: FakeRunPodClient,
+    image_store: FakeImageStore,
+) -> None:
+    job_id = await submit_and_complete(stored_client, stored_service, runpod)
+    image_store.evict(f"{job_id}.png")
+
+    image = stored_client.get(f"/v1/jobs/{job_id}/image", headers=AUTH)
+    view = stored_client.get(f"/v1/jobs/{job_id}", headers=AUTH)
+
+    assert image.status_code == 410
+    assert image.json()["error"]["code"] == "JOB_NOT_FOUND"
+    assert image.json()["error"]["suggestion"]
+    assert view.json()["status"] == "COMPLETED"
+    assert view.json()["result"]["seed"] == 7
+
+
+async def test_without_a_store_the_image_route_serves_the_inline_copy(
+    client: TestClient, service: JobService, runpod: FakeRunPodClient
+) -> None:
+    """Memory mode keeps base64 on the row; the route still answers with bytes."""
+    job_id = await submit_and_complete(client, service, runpod)
+
+    response = client.get(f"/v1/jobs/{job_id}/image", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.content == b"hello"
+
+
+# --- /v1/metrics ---
+
+
+def test_metrics_requires_a_credential(client: TestClient) -> None:
+    response = client.get("/v1/metrics")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+async def test_metrics_reports_the_callers_aggregates(
+    client: TestClient, service: JobService, runpod: FakeRunPodClient
+) -> None:
+    client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH)
+    runpod.next_status = completed()
+    await service.reconcile()
+    client.post("/v1/jobs", json={"prompt": "another fox"}, headers=AUTH)
+
+    body = client.get("/v1/metrics", headers=AUTH).json()
+
+    assert body["jobs"]["by_status"]["COMPLETED"] == 1
+    assert body["jobs"]["by_status"]["QUEUED"] == 1
+    assert body["jobs"]["by_status"]["CANCELLED"] == 0
+    assert body["jobs"]["last_hour"] == 2
+    assert body["jobs"]["active_now"] == 1
+    assert body["latency"]["inference"]["p50_s"] == 21.4
+    assert body["latency"]["wall"]["p50_s"] == 0.0
+    assert body["cost"]["estimated_cost_usd"] == pytest.approx(21.4 * 1.75 / 3600)
+    assert body["window"] == 100
+    assert body["completed_in_window"] == 1
+    assert len(body["throughput"]) == 24
+    assert body["throughput"][-1]["completed"] == 1
+    assert body["generated_at"]
+
+
+def test_metrics_are_scoped_to_the_caller(client: TestClient) -> None:
+    client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH)
+
+    body = client.get("/v1/metrics", headers=OTHER_AUTH).json()
+
+    assert all(count == 0 for count in body["jobs"]["by_status"].values())
+    assert body["jobs"]["active_now"] == 0
+    assert body["latency"]["inference"]["p50_s"] is None
+    assert body["cost"]["estimated_cost_usd"] == 0.0
+    assert body["cost"]["estimated_cost_usd_per_job"] is None
+
+
+def test_metrics_upstream_is_unknown_before_any_reading(client: TestClient) -> None:
+    body = client.get("/v1/metrics", headers=AUTH).json()
+
+    assert body["upstream"]["queue"]["status"] == "unknown"
+    assert body["upstream"]["reconciler"]["status"] == "unknown"
+
+
+async def test_metrics_upstream_mirrors_detailed_health(
+    service: JobService, runpod: FakeRunPodClient, settings: Settings
+) -> None:
+    runpod.health_value = EndpointHealth(
+        in_queue=3, in_progress=1, workers_running=2, workers_idle=4
+    )
+    await service.reconcile()
+    app = create_app(
+        Deps(service=service, settings=settings, reconciler_age=lambda: 1.5)
+    )
+
+    body = TestClient(app).get("/v1/metrics", headers=AUTH).json()
+
+    assert body["upstream"]["queue"] == {
+        "status": "ok",
+        "in_queue": 3,
+        "in_progress": 1,
+        "workers_running": 2,
+        "workers_idle": 4,
+        "age_s": 0.0,
+        "stale": False,
+        "stale_after_s": settings.health_max_age_s,
+    }
+    assert body["upstream"]["reconciler"] == {
+        "status": "ok",
+        "last_tick_s": 1.5,
+        "stale": False,
+        "stale_after_s": reconciler_stall_s(settings),
+    }
+
+
+async def test_metrics_reports_a_stalled_reconciler(
+    service: JobService, runpod: FakeRunPodClient, settings: Settings
+) -> None:
+    await service.reconcile()
+    age = reconciler_stall_s(settings) + 1
+    app = create_app(
+        Deps(service=service, settings=settings, reconciler_age=lambda: age)
+    )
+
+    body = TestClient(app).get("/v1/metrics", headers=AUTH).json()
+
+    assert body["upstream"]["reconciler"] == {
+        "status": "stalled",
+        "last_tick_s": age,
+        "stale": True,
+        "stale_after_s": reconciler_stall_s(settings),
+    }
+
+
+async def test_metrics_marks_a_queue_reading_older_than_the_threshold_stale(
+    service: JobService,
+    runpod: FakeRunPodClient,
+    settings: Settings,
+    clock: FrozenClock,
+) -> None:
+    """The cutoff is the gateway's own: the one load shedding already uses."""
+    await service.reconcile()
+    clock.advance(settings.health_max_age_s + 1)
+    app = create_app(Deps(service=service, settings=settings))
+
+    queue = TestClient(app).get("/v1/metrics", headers=AUTH).json()["upstream"]["queue"]
+
+    assert queue["status"] == "ok"
+    assert queue["stale"] is True
+    assert queue["age_s"] == settings.health_max_age_s + 1
+
+
+async def test_metrics_without_any_reading_is_stale_not_fresh(
+    client: TestClient,
+) -> None:
+    body = client.get("/v1/metrics", headers=AUTH).json()
+
+    assert body["upstream"]["queue"]["stale"] is True
+    assert body["upstream"]["reconciler"]["stale"] is True
+
+
+async def test_metrics_cost_carries_the_seconds_it_priced(
+    client: TestClient, service: JobService, runpod: FakeRunPodClient
+) -> None:
+    client.post("/v1/jobs", json={"prompt": "a red fox"}, headers=AUTH)
+    runpod.next_status = completed()
+    await service.reconcile()
+
+    body = client.get("/v1/metrics", headers=AUTH).json()
+
+    cost = body["cost"]
+    assert cost["exec_seconds_in_window"] == 21.4
+    assert cost["estimated_cost_usd"] == pytest.approx(
+        cost["exec_seconds_in_window"] * cost["gpu_rate_usd_hr"] / 3600
+    )
+    assert body["window_started_at"] == body["window_ended_at"]
+    assert body["window_started_at"] is not None

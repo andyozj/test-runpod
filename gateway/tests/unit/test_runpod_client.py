@@ -392,7 +392,28 @@ async def test_in_progress_partial_output_is_parsed_as_progress() -> None:
         28,
         25,
     )
+    assert result.progress.preview_b64 is None
+    assert result.progress.preview_format is None
     assert result.result is None
+
+
+async def test_in_progress_preview_fields_are_carried_through() -> None:
+    output = {
+        "step": 14,
+        "total": 28,
+        "percent": 50,
+        "preview_b64": "aGVsbG8=",
+        "preview_format": "jpeg",
+    }
+    client, _ = make(
+        [httpx.Response(200, json={"status": "IN_PROGRESS", "output": output})]
+    )
+
+    result = await client.status("up-1")
+
+    assert result.progress is not None
+    assert result.progress.preview_b64 == "aGVsbG8="
+    assert result.progress.preview_format == "jpeg"
 
 
 @pytest.mark.parametrize(

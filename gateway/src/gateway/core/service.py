@@ -5,24 +5,39 @@ from __future__ import annotations
 import math
 import random
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from uuid import UUID
 
 import structlog
 
+from gateway.core.metrics import (
+    DEFAULT_GPU_RATE_USD_HR,
+    DEFAULT_METRICS_WINDOW,
+    THROUGHPUT_HOURS,
+    MetricsSnapshot,
+    estimated_cost_usd,
+    execution_seconds,
+    hour_buckets,
+    hour_floor,
+    latency_stats,
+    window_span,
+)
 from gateway.core.models import (
     ErrorCode,
     GenerationParams,
     Job,
     JobStatus,
+    Progress,
     RequestContext,
 )
 from gateway.core.protocols import (
     Clock,
     EndpointHealth,
+    ImageStore,
     JobRepository,
     PromptGuardrail,
+    RateLimiter,
     RunPodClient,
     RunPodJobStatus,
 )
@@ -41,6 +56,8 @@ DEFAULT_MAX_ACTIVE_JOBS_PER_KEY = 10
 DEFAULT_CLAIM_LEASE_S = 60.0
 
 RETRY_AFTER_JITTER = (0.8, 1.2)
+
+COMPLETE_PERCENT = 100
 
 
 def _retry_after_s(wait_s: float) -> int:
@@ -104,6 +121,21 @@ class ActiveJobLimitError(Exception):
         self.retry_after_s = retry_after_s
 
 
+class RateLimitedError(Exception):
+    """Raised when the caller's request-rate budget is exhausted.
+
+    Bounds how *often* one key may submit, where `ActiveJobLimitError` bounds
+    how *much* of the queue it may hold at once.
+
+    Attributes:
+        retry_after_s: How long the caller should wait before retrying.
+    """
+
+    def __init__(self, retry_after_s: int) -> None:
+        super().__init__("The caller's request rate limit has been reached.")
+        self.retry_after_s = retry_after_s
+
+
 @dataclass
 class JobService:
     """Submit, read and reconcile generation jobs.
@@ -113,6 +145,10 @@ class JobService:
         runpod: The upstream endpoint.
         guardrail: Prompt content check.
         clock: Injected wall time.
+        image_store: Where completed images are offloaded. None keeps the
+            base64 inline on the row, the pre-store behaviour.
+        rate_limiter: Per-key request budget for first-attempt submissions.
+            None disables rate limiting.
         job_deadline_s: Age at which an unresolved job is timed out.
         max_queue_wait_s: Estimated wait above which submissions are shed.
         avg_job_s: Expected job duration, replaced by a measured p50.
@@ -122,12 +158,16 @@ class JobService:
             unknown.
         claim_lease_s: How long a reconciler claim excludes other callers.
         max_active_jobs_per_key: Non-terminal job cap per caller.
+        metrics_window: Completed jobs the latency and cost metrics cover.
+        gpu_rate_usd_hr: Hourly GPU rate behind the cost estimate.
     """
 
     repository: JobRepository
     runpod: RunPodClient
     guardrail: PromptGuardrail
     clock: Clock
+    image_store: ImageStore | None = None
+    rate_limiter: RateLimiter | None = None
     job_deadline_s: int = DEFAULT_JOB_DEADLINE_S
     max_queue_wait_s: float = DEFAULT_MAX_QUEUE_WAIT_S
     avg_job_s: float = DEFAULT_AVG_JOB_S
@@ -135,6 +175,8 @@ class JobService:
     health_max_age_s: float = DEFAULT_HEALTH_MAX_AGE_S
     claim_lease_s: float = DEFAULT_CLAIM_LEASE_S
     max_active_jobs_per_key: int = DEFAULT_MAX_ACTIVE_JOBS_PER_KEY
+    metrics_window: int = DEFAULT_METRICS_WINDOW
+    gpu_rate_usd_hr: float = DEFAULT_GPU_RATE_USD_HR
     _health: EndpointHealth | None = None
     _health_at: datetime | None = None
     _outstanding: int = 0
@@ -159,6 +201,7 @@ class JobService:
             The created or replayed job, flagged with which it was.
 
         Raises:
+            RateLimitedError: The caller's request-rate budget is exhausted.
             QueueSaturatedError: The estimated wait exceeds the threshold.
             ActiveJobLimitError: The caller is already at its active job cap.
             IdempotencyConflictError: The key was reused with a different body.
@@ -244,6 +287,66 @@ class JobService:
             The job, or None if unknown.
         """
         return await self.repository.get(job_id)
+
+    async def list_jobs(self, api_key_id: str, limit: int) -> list[Job]:
+        """List one caller's jobs, newest first.
+
+        Args:
+            api_key_id: The caller whose jobs are listed.
+            limit: Maximum jobs to return.
+
+        Returns:
+            Up to `limit` jobs, newest first.
+        """
+        return await self.repository.list_recent(api_key_id, limit)
+
+    async def metrics(self, api_key_id: str) -> MetricsSnapshot:
+        """Assemble one caller's dashboard aggregates from the ledger.
+
+        Per-key, like every job read: the counts, percentiles and cost cover
+        only this caller's jobs. Latency percentiles are nearest-rank over the
+        newest `metrics_window` completed jobs; cost is the window's execution
+        seconds priced at `gpu_rate_usd_hr` — an estimate, not billing data.
+
+        The window's execution seconds and its `completed_at` span are
+        reported alongside the cost, so a caller can recompute the estimate
+        and express it over a known interval instead of an unknown one.
+
+        Args:
+            api_key_id: The caller whose jobs are aggregated.
+
+        Returns:
+            The snapshot, stamped with the clock's current time.
+        """
+        now = self.clock.now()
+        timings = await self.repository.recent_completed_timings(
+            api_key_id, self.metrics_window
+        )
+        per_hour = await self.repository.count_completed_by_hour(
+            api_key_id, hour_floor(now) - timedelta(hours=THROUGHPUT_HOURS - 1)
+        )
+        exec_seconds = execution_seconds(timings)
+        total_cost = estimated_cost_usd(exec_seconds, self.gpu_rate_usd_hr)
+        started_at, ended_at = window_span(timings)
+        return MetricsSnapshot(
+            by_status=await self.repository.count_by_status(api_key_id),
+            created_last_hour=await self.repository.count_created_since(
+                api_key_id, now - timedelta(hours=1)
+            ),
+            active_now=await self.repository.count_active(api_key_id),
+            inference=latency_stats([t.inference_seconds for t in timings]),
+            wall=latency_stats([t.wall_seconds for t in timings]),
+            throughput=hour_buckets(per_hour, now),
+            window=self.metrics_window,
+            completed_in_window=len(timings),
+            window_started_at=started_at,
+            window_ended_at=ended_at,
+            estimated_cost_usd=total_cost,
+            estimated_cost_usd_per_job=total_cost / len(timings) if timings else None,
+            exec_seconds_in_window=exec_seconds,
+            gpu_rate_usd_hr=self.gpu_rate_usd_hr,
+            generated_at=now,
+        )
 
     async def cancel(self, job_id: UUID) -> Job | None:
         """Stop a job, upstream and locally.
@@ -358,6 +461,12 @@ class JobService:
     async def _complete(self, job: Job, upstream: RunPodJobStatus) -> bool:
         """Record a completion, or fail it when there is no image.
 
+        With an image store bound, the base64 is decoded to a file first and
+        the stored row keeps only the path and a ThumbHash. A store failure
+        propagates rather than completing the job without its image: the tick
+        skips the job and the next one retries, while upstream still holds the
+        result.
+
         Args:
             job: The claimed job.
             upstream: An upstream reading reporting COMPLETED.
@@ -365,7 +474,8 @@ class JobService:
         Returns:
             True, since either outcome is terminal.
         """
-        if upstream.result is None or upstream.result.image_base64 is None:
+        result = upstream.result
+        if result is None or result.image_base64 is None:
             await self.repository.mark_failed(
                 job.id,
                 ErrorCode.INFERENCE_FAILED,
@@ -373,7 +483,31 @@ class JobService:
                 JobStatus.FAILED,
             )
             return True
-        await self.repository.mark_completed(job.id, upstream.result)
+        if self.image_store is not None:
+            stored = await self.image_store.save(
+                job.id, result.image_base64, result.format
+            )
+            result = replace(
+                result,
+                image_base64=None,
+                image_path=stored.path,
+                thumbhash=stored.thumbhash,
+            )
+        # The poll that observes completion rarely observed the last step, so
+        # the row would otherwise keep whatever mid-run snapshot came before it.
+        progress = job.progress
+        if progress is not None and (
+            progress.step != progress.total or progress.percent != COMPLETE_PERCENT
+        ):
+            await self.repository.mark_in_progress(
+                job.id,
+                Progress(
+                    step=progress.total,
+                    total=progress.total,
+                    percent=COMPLETE_PERCENT,
+                ),
+            )
+        await self.repository.mark_completed(job.id, result)
         return True
 
     async def _time_out(self, job: Job) -> bool:
@@ -494,18 +628,43 @@ class JobService:
             job: The job just inserted, still QUEUED.
 
         Raises:
+            RateLimitedError: The caller's request-rate budget is exhausted.
             QueueSaturatedError: The estimated wait exceeds the threshold.
             ActiveJobLimitError: The caller is already at its active job cap.
         """
         try:
+            self._check_rate_limit(job.context.api_key_id)
             self._check_queue_pressure()
             await self._check_active_job_cap(job.context.api_key_id)
-        except (QueueSaturatedError, ActiveJobLimitError) as exc:
+        except (RateLimitedError, QueueSaturatedError, ActiveJobLimitError) as exc:
             await self.repository.mark_failed(
                 job.id, ErrorCode.QUEUE_SATURATED, str(exc), JobStatus.FAILED
             )
             await self.repository.release_idempotency_key(job.id)
             raise
+
+    def _check_rate_limit(self, api_key_id: str) -> None:
+        """Reject when the caller's token bucket is empty.
+
+        First of the three shed checks: it is per-key, synchronous and
+        deterministic, so an over-rate caller is refused before any queue
+        arithmetic or repository count runs on its behalf.
+
+        Only ever reached on a first attempt — a replay and a blocked prompt
+        have both returned earlier in `submit` — so an idempotent retry of an
+        accepted job never spends a second token.
+
+        Args:
+            api_key_id: The caller's identity.
+
+        Raises:
+            RateLimitedError: The bucket is empty.
+        """
+        if self.rate_limiter is None:
+            return
+        decision = self.rate_limiter.acquire(api_key_id)
+        if not decision.allowed:
+            raise RateLimitedError(retry_after_s=decision.retry_after_s)
 
     async def _check_active_job_cap(self, api_key_id: str) -> None:
         """Reject once the caller already has the maximum unresolved jobs.
@@ -553,3 +712,14 @@ class JobService:
             The cached reading, or None if unavailable.
         """
         return self._health
+
+    @property
+    def endpoint_health_age_s(self) -> float | None:
+        """Age of the cached health reading, the caller's staleness signal.
+
+        Returns:
+            Seconds since the reading was taken, or None without one.
+        """
+        if self._health_at is None:
+            return None
+        return (self.clock.now() - self._health_at).total_seconds()

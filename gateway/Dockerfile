@@ -18,13 +18,20 @@ WORKDIR /app
 COPY gateway/pyproject.toml gateway/uv.lock ./
 RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
     && uv pip install --system --no-cache -r /tmp/requirements.txt \
-    && python -c "import fastapi, uvicorn, httpx, pydantic, structlog"
+    && python -c "import fastapi, uvicorn, httpx, pydantic, structlog, asyncpg, alembic, PIL"
 
 COPY contracts/ /app/contracts/
 COPY gateway/src/ /app/src/
+# Migrations run at startup when DATABASE_URL is set; adapters/schema.py
+# resolves alembic.ini and migrations/ relative to the package, i.e. /app.
+COPY gateway/alembic.ini /app/alembic.ini
+COPY gateway/migrations/ /app/migrations/
 
-# Non-root: matches worker/Dockerfile's policy.
-RUN useradd --uid 1000 --create-home gateway
+# Non-root: matches worker/Dockerfile's policy. The image dir must exist owned
+# by the app user before a volume lands on it, or the mount arrives root-owned
+# and the first save fails.
+RUN useradd --uid 1000 --create-home gateway \
+    && mkdir -p /data/images && chown gateway /data/images
 USER gateway
 
 EXPOSE 8000

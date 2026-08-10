@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -17,12 +20,48 @@ import pytest
 os.environ.setdefault("GATEWAY_API_KEYS", "demo:local-development-key")
 
 from gateway.adapters.memory import InMemoryJobRepository
-from gateway.core.models import ErrorCode, JobResult, JobStatus, Progress
-from gateway.core.protocols import EndpointHealth, RunPodJobStatus
+from gateway.core.models import (
+    ErrorCode,
+    GenerationParams,
+    Job,
+    JobResult,
+    JobStatus,
+    Progress,
+    RequestContext,
+)
+from gateway.core.protocols import EndpointHealth, RunPodJobStatus, StoredImage
 from gateway.core.service import JobService
 from gateway.settings import Settings
 
 FROZEN = datetime(2026, 8, 5, 12, 0, 0, tzinfo=UTC)
+
+
+def make_job(status: JobStatus = JobStatus.QUEUED, api_key_id: str = "demo") -> Job:
+    params = GenerationParams(prompt="a fox")
+    return Job(
+        id=uuid.uuid4(),
+        status=status,
+        params=params,
+        context=RequestContext(api_key_id=api_key_id, correlation_id="c-1"),
+        created_at=FROZEN,
+        updated_at=FROZEN,
+        request_hash=params.fingerprint(),
+    )
+
+
+def keyed_job(key: str, prompt: str = "a fox") -> Job:
+    params = GenerationParams(prompt=prompt)
+    return Job(
+        id=uuid.uuid4(),
+        status=JobStatus.QUEUED,
+        params=params,
+        context=RequestContext(
+            api_key_id="demo", correlation_id="c-1", idempotency_key=key
+        ),
+        created_at=FROZEN,
+        updated_at=FROZEN,
+        request_hash=params.fingerprint(),
+    )
 
 
 @dataclass
@@ -83,6 +122,30 @@ class FakeRunPodClient:
 
 
 @dataclass
+class FakeImageStore:
+    """In-memory ImageStore: dict-backed, with scripted failure and eviction."""
+
+    saved: dict[str, bytes] = field(default_factory=dict)
+    thumbhash: str = "1QcSHQRnh493V4dIh4eXh1h4kJUI"
+    save_raises: Exception | None = None
+
+    async def save(
+        self, job_id: UUID, image_base64: str, image_format: str
+    ) -> StoredImage:
+        if self.save_raises is not None:
+            raise self.save_raises
+        path = f"{job_id}.{image_format}"
+        self.saved[path] = base64.b64decode(image_base64)
+        return StoredImage(path=path, thumbhash=self.thumbhash)
+
+    async def load(self, path: str) -> bytes | None:
+        return self.saved.get(path)
+
+    def evict(self, path: str) -> None:
+        self.saved.pop(path, None)
+
+
+@dataclass
 class Verdict:
     blocked: bool = False
     reason: str | None = None
@@ -120,10 +183,18 @@ def failed(code: ErrorCode = ErrorCode.INFERENCE_FAILED) -> RunPodJobStatus:
     )
 
 
-def in_progress(step: int, total: int) -> RunPodJobStatus:
+def in_progress(
+    step: int, total: int, preview_b64: str | None = None
+) -> RunPodJobStatus:
     return RunPodJobStatus(
         status=JobStatus.IN_PROGRESS,
-        progress=Progress(step=step, total=total, percent=round(100 * step / total)),
+        progress=Progress(
+            step=step,
+            total=total,
+            percent=round(100 * step / total),
+            preview_b64=preview_b64,
+            preview_format="jpeg" if preview_b64 else None,
+        ),
     )
 
 

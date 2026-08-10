@@ -10,10 +10,15 @@ import structlog
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# The service owns these numbers; this module only says which of them the
-# environment may override. Repeating the literals here is how the two drift
-# into disagreeing about what "the default" is. The import direction is the
-# only one the layering allows: `core/` never imports settings.
+# The service and the limiter own these numbers; this module only says which
+# of them the environment may override. Repeating the literals here is how the
+# two drift into disagreeing about what "the default" is. The import direction
+# is the only one the layering allows: `core/` never imports settings.
+from gateway.adapters.ratelimit import (
+    DEFAULT_RATE_LIMIT_BURST,
+    DEFAULT_RATE_LIMIT_RPM,
+)
+from gateway.core.metrics import DEFAULT_GPU_RATE_USD_HR, DEFAULT_METRICS_WINDOW
 from gateway.core.service import (
     DEFAULT_AVG_JOB_S,
     DEFAULT_HEALTH_MAX_AGE_S,
@@ -32,6 +37,12 @@ class Settings(BaseSettings):
     Attributes:
         runpod_api_key: Credential for the serverless endpoint.
         runpod_endpoint_id: The endpoint to call.
+        database_url: Postgres DSN. Unset or empty selects the in-memory
+            repository; set selects Postgres plus the filesystem image store.
+        gateway_image_dir: Directory for decoded result images. Only read
+            when `database_url` is set.
+        gateway_image_store_max_bytes: Byte cap on that directory; the oldest
+            images are evicted first once a save exceeds it.
         gateway_api_keys: Caller credentials as `key_id:secret` pairs. Required;
             there is no built-in credential, so an unset or empty value fails
             startup rather than admitting an undocumented default caller.
@@ -52,6 +63,16 @@ class Settings(BaseSettings):
         max_active_jobs_per_key: Non-terminal job cap per caller. Bounds how
             much of the (billable) queue one compromised or runaway key can
             occupy.
+        gateway_rate_limit_rpm: Sustained submissions per minute per key; the
+            token-bucket refill rate. One global policy — every key gets the
+            same bucket, deliberately without per-key-class overrides.
+        gateway_rate_limit_burst: Bucket capacity: submissions admitted at
+            once from a full bucket before the refill rate applies.
+        gateway_metrics_window: Completed jobs the `/v1/metrics` latency and
+            cost aggregates cover.
+        gateway_gpu_rate_usd_hr: Hourly GPU rate behind `estimated_cost_usd`.
+            Default is BENCHMARKS.md's measured 48GB-tier rate ($1.75/hr,
+            2026-08-05); an estimate, not billing data.
         version: Reported by the health endpoints.
     """
 
@@ -59,6 +80,9 @@ class Settings(BaseSettings):
 
     runpod_api_key: str = ""
     runpod_endpoint_id: str = ""
+    database_url: str = ""
+    gateway_image_dir: str = "images"
+    gateway_image_store_max_bytes: int = 1_073_741_824  # 1 GiB
     gateway_api_keys: str
     reconcile_interval_s: float = 2.0
     reconcile_idle_interval_s: float = 10.0
@@ -69,6 +93,10 @@ class Settings(BaseSettings):
     submit_grace_s: float = DEFAULT_SUBMIT_GRACE_S
     health_max_age_s: float = DEFAULT_HEALTH_MAX_AGE_S
     max_active_jobs_per_key: int = DEFAULT_MAX_ACTIVE_JOBS_PER_KEY
+    gateway_rate_limit_rpm: int = Field(default=DEFAULT_RATE_LIMIT_RPM, ge=1)
+    gateway_rate_limit_burst: int = Field(default=DEFAULT_RATE_LIMIT_BURST, ge=1)
+    gateway_metrics_window: int = Field(default=DEFAULT_METRICS_WINDOW, ge=1)
+    gateway_gpu_rate_usd_hr: float = Field(default=DEFAULT_GPU_RATE_USD_HR, gt=0)
     version: str = Field(default="0.1.0")
 
     @field_validator("gateway_api_keys")
