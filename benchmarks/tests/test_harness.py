@@ -58,12 +58,17 @@ def test_worker_cost_is_rate_times_execution_seconds() -> None:
     assert abs(worker_cost_usd(21800, 1.75) - 0.01059722) < 1e-6
 
 
-def test_fake_public_api_matches_the_documented_output_shape() -> None:
+def test_fake_public_api_matches_the_live_output_shape() -> None:
+    # Measured 2026-08-10: the endpoint returns the URL under `result`, not
+    # the `image_url` its docs describe. The fixture prices at the published
+    # $0.02/MP; live invoices came in flat at $0.0120/image, so this cost is
+    # the ceiling a dry run should estimate against, not the billed figure.
     api = FakePublicApi()
 
     job = api.wait(api.submit({"prompt": "x", "width": 1024, "height": 1024}))
 
     assert job["status"] == "COMPLETED"
-    assert job["output"]["image_url"].startswith("https://image.runpod.ai/")
+    assert job["output"]["result"].startswith("https://image.runpod.ai/")
+    assert "image_url" not in job["output"]
     assert abs(job["output"]["cost"] - 0.02097152) < 1e-9
     assert "image_base64" not in job["output"]
