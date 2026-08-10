@@ -1,0 +1,408 @@
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Geist Variable', system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
+
+  /* integer type steps: the 15px root turned xs/sm into 11.25/13.125px, which
+     put mono baselines on fractional pixels and blurred every micro-label */
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+
+  /* elevation ladder: bg → panel → raised → overlay, one cool hue family */
+  --color-bg: oklch(0.14 0.005 250);
+  --color-surface: oklch(0.175 0.005 250);
+  --color-raised: oklch(0.205 0.006 250);
+  --color-overlay: oklch(0.23 0.006 250);
+  --color-hairline: oklch(1 0 0 / 8%);
+  --color-hairline-strong: oklch(1 0 0 / 14%);
+
+  /* two text tiers, both AA at 11px on every surface: values ≥0.67 L, labels
+     and captions 0.63 L (~6:1). --ink-faint is decorative only — separators,
+     disabled controls — and never carries information on its own. */
+  --color-ink: oklch(0.93 0.005 250);
+  --color-ink-dim: oklch(0.67 0.008 250);
+  --color-ink-label: oklch(0.63 0.008 250);
+  --color-ink-faint: oklch(0.56 0.008 250);
+
+  --color-accent: oklch(0.78 0.14 70);
+  --color-accent-bright: oklch(0.84 0.15 70);
+  --color-accent-dim: oklch(0.78 0.14 70 / 35%);
+  --color-accent-glow: oklch(0.78 0.14 70 / 20%);
+
+  --color-ok: oklch(0.75 0.13 150);
+  --color-err: oklch(0.65 0.19 25);
+  --color-warn: oklch(0.72 0.15 55);
+}
+
+html {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* dotted-grid work surface */
+.dotgrid {
+  background-image: radial-gradient(oklch(1 0 0 / 5%) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* fixed full-viewport film grain, SVG turbulence */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+
+/* faint radial vignette: work canvas lit, edges fall off ~4% */
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 90% at 44% 42%,
+    transparent 55%,
+    oklch(0 0 0 / 26%) 100%
+  );
+}
+
+/* panel depth without shadows: 1px inner top-edge highlight */
+.panel {
+  background: var(--color-surface);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 5%);
+}
+.raised-lit {
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 5%);
+}
+
+/* small-caps micro-label over mono value: the core typographic move */
+.microlabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-ink-label);
+}
+
+/* one treatment for every backend error code, in every surface it appears */
+.code-chip {
+  display: inline-block;
+  border: 1px solid oklch(0.65 0.19 25 / 45%);
+  border-radius: 3px;
+  padding: 1px 6px;
+  background: oklch(0.65 0.19 25 / 10%);
+  color: var(--color-err);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.code-chip.warn {
+  border-color: oklch(0.72 0.15 55 / 45%);
+  background: oklch(0.72 0.15 55 / 10%);
+  color: var(--color-warn);
+}
+.code-chip.neutral {
+  border-color: var(--color-hairline-strong);
+  background: transparent;
+  color: var(--color-ink-label);
+}
+
+/* the display moment: one dominant number per state */
+.display-number {
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+/* native <dialog> as a full-viewport modal shell: the element carries its own
+   scrim via a bg-* utility, so only strip the UA chrome (no background here —
+   this selector would outspecify the utility) */
+dialog.modal-shell {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  color: inherit;
+}
+dialog.modal-shell:not([open]) {
+  display: none;
+}
+dialog.modal-shell::backdrop {
+  background: transparent;
+}
+
+/* visible focus on every interactive element */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* press feedback on every button; .press-spring buttons animate via Motion instead */
+:where(button:not(.press-spring)):not(:disabled):active {
+  scale: 0.98;
+}
+:where(button) {
+  transition: scale 80ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  :where(button):not(:disabled):active {
+    scale: 1;
+  }
+}
+
+/* skip link surfaces only on keyboard focus */
+.skip-link {
+  position: fixed;
+  top: -100px;
+  left: 8px;
+  z-index: 100;
+  padding: 6px 10px;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  background: var(--color-overlay);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.skip-link:focus-visible {
+  top: 8px;
+}
+
+/* button-state system: primary = amber fill; ghost = hairline outline */
+.btn-primary {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-family: var(--font-mono);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-accent-bright);
+}
+.btn-primary:disabled {
+  cursor: default;
+  background: transparent;
+  border-color: var(--color-hairline);
+  color: var(--color-ink-faint);
+}
+.btn-ghost {
+  cursor: pointer;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink-dim);
+  font-family: var(--font-mono);
+}
+.btn-ghost:hover:not(:disabled) {
+  border-color: oklch(1 0 0 / 24%);
+  color: var(--color-ink);
+}
+.btn-ghost:disabled {
+  border-color: var(--color-hairline);
+}
+.btn-ghost:disabled {
+  cursor: default;
+  color: var(--color-ink-faint);
+}
+.btn-ghost.danger:hover:not(:disabled) {
+  border-color: var(--color-err);
+  color: var(--color-err);
+}
+/* primary-ghost: accent outline for the one guided action per empty state */
+.btn-ghost.primary {
+  border-color: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+.btn-ghost.primary:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent-bright);
+}
+
+/* selects carry the token chevron, never OS chrome */
+.select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%2362666e' stroke-width='1.2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 22px;
+}
+
+/* the prompt bar signals focus with an accent-dim glow ring */
+.prompt-bar textarea:focus-visible {
+  outline: none;
+}
+.prompt-bar:focus-within {
+  border-color: var(--color-accent-dim);
+  box-shadow: 0 0 0 3px var(--color-accent-glow);
+}
+
+/* numeric inputs are values: mono, no spin chrome */
+input[type='number'] {
+  appearance: textfield;
+}
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  appearance: none;
+}
+
+/* hand-rolled range slider: hairline track, accent fill via --fill, square thumb */
+.slider {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+.slider::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(
+    to right,
+    var(--color-accent) var(--fill, 0%),
+    var(--color-hairline-strong) var(--fill, 0%)
+  );
+}
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px;
+  width: 4px;
+  height: 12px;
+  border: none;
+  border-radius: 1px;
+  background: var(--color-ink);
+}
+.slider:hover::-webkit-slider-thumb {
+  background: var(--color-accent-bright);
+}
+.slider::-moz-range-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-hairline-strong);
+}
+.slider::-moz-range-progress {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+}
+.slider::-moz-range-thumb {
+  width: 4px;
+  height: 12px;
+  border: none;
+  border-radius: 1px;
+  background: var(--color-ink);
+}
+.slider:hover::-moz-range-thumb {
+  background: var(--color-accent-bright);
+}
+
+/* empty cell: aspect-matched off the viewport height, shorter below sm so the
+   thesis card's CTA clears the prompt bar without scrolling */
+.empty-cell {
+  width: min(calc(var(--ar) * 48vh), 100%);
+}
+@media (width < 40rem) {
+  .empty-cell {
+    width: min(calc(var(--ar) * 32vh), 100%);
+  }
+}
+
+/* batch/sweep cluster: the 2×2 grid used to be sized off a 20vh-per-cell rule
+   and stranded ~350px of dead canvas on each side. Sized off the canvas now,
+   capped so cells never outgrow the work surface. */
+.batch-cluster {
+  --ar: 1;
+  --grid: min(calc(56vh * var(--ar)), 46vw, 720px);
+  width: var(--grid);
+}
+.batch-cluster.pair {
+  --grid: min(calc(84vh * var(--ar)), 62vw, 900px);
+}
+.batch-grid {
+  width: var(--grid);
+}
+/* ≥1280 the timeline sits beside the grid: the grid gets the whole canvas
+   height back, which is what lets the cells nearly double */
+@media (width >= 80rem) {
+  .batch-cluster {
+    --grid: min(calc(74vh * var(--ar)), 40vw, 860px);
+    width: calc(var(--grid) + 336px);
+  }
+  .batch-cluster.pair {
+    --grid: min(calc(88vh * var(--ar)), 46vw, 900px);
+  }
+  .batch-cluster.solo {
+    width: var(--grid);
+  }
+}
+
+/* the prompt bar stops stretching to 1800px on ultrawide */
+@media (width >= 100rem) {
+  .prompt-wrap {
+    max-width: 1100px;
+    margin-inline: auto;
+  }
+}
+
+/* gallery card: uniform thumbnail + fixed metadata zone so every card in a row
+   is exactly the same height; the true aspect lives in the detail overlay */
+.card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px;
+  height: 48px; /* exactly two chip rows, reserved whether or not they fill */
+  overflow: hidden;
+}
+
+/* hover-revealed verbs stay visible where hover does not exist (touch) */
+@media (hover: none) {
+  .hover-reveal {
+    opacity: 1 !important;
+    translate: 0 !important;
+  }
+}
+
+/* gallery skeleton: elevation pulse, no spinner */
+.skeleton {
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    background-color: var(--color-surface);
+  }
+  50% {
+    background-color: var(--color-raised);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
