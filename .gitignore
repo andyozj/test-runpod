@@ -14,6 +14,9 @@ uv.lock.bak
 *.png
 !docs/**/*.png
 !samples/**/*.png
+# mock fixtures the frontend's visual and reproducibility tests read
+!frontend/public/mock/*.png
+!frontend/tests/**/*.png
 
 .DS_Store
 **/.DS_Store

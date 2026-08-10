@@ -2,7 +2,7 @@
 
 Operational procedures. Written to be followed under time pressure by someone who did not write them.
 
-Procedures: [Prerequisites](#prerequisites) · [Build and push](#build-and-push) · [Deploy](#deploy) · [Verify](#verify) · [Rollback](#rollback) · [Diagnosis](#diagnosis) · [Teardown](#teardown).
+Procedures: [Prerequisites](#prerequisites) · [Build and push](#build-and-push) · [Deploy](#deploy) · [Verify](#verify) · [Stack pod](#stack-pod-the-full-application) · [Rollback](#rollback) · [Diagnosis](#diagnosis) · [Teardown](#teardown).
 Records (evidence, not procedure): [Deploy record](#deploy-record-evidence) · [Compose surface checks](#record-compose-surface-checks-2026-08-06).
 
 ## Deploy record (evidence)
@@ -21,7 +21,7 @@ What this runbook does not cover, so nobody looks for it at 3am:
 
 - **No automatic rollback.** `smoke-test` in `deploy.yml` runs *after* `deploy` has already mutated the endpoint. A red smoke test is detection; the rollback is a human re-running the workflow with the previous tag from the record above.
 - **One endpoint, in place.** `deploy/endpoints/cached.yaml` is the deployed config; `baked.yaml` is documented, not deployed. No blue/green, no canary, no traffic split — an apply replaces the running configuration and bounces the workers.
-- **The gateway is not in this deploy path.** `deploy.yml` deploys the worker endpoint only. The gateway runs from `compose.yaml` locally; nothing here deploys it anywhere.
+- **Two deploy paths, two workflows.** `deploy.yml` deploys the worker endpoint only. The gateway (with frontend and Postgres) deploys as the [stack pod](#stack-pod-the-full-application) through `deploy-stack.yml`; `compose.yaml` remains the local mirror.
 - **No alerting.** Failures are found by running the checks below. Cold-start failures emit nothing at all (see [What is visible from where](#what-is-visible-from-where)).
 - **Secrets are rotated by hand.** The complete list of what exists and where it is read: `.env.example` (every variable either settings module reads, plus build-time and compose passthroughs), and the two GitHub repo secrets `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID`. Teardown revocation steps are at the bottom.
 
@@ -83,9 +83,9 @@ The image also ships `test_input.json`, so on a GPU host `docker run --rm --gpus
 
 ## Deploy
 
-Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's REST API. The script upserts a **template** (image, environment) and then an **endpoint** (GPUs, scaling, timeouts, filters). RunPod models those separately, so a deploy is two idempotent calls, each looked up by name.
+Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's REST API v2 (`api.runpod.io/v2`). v1 split a deploy into a template plus an endpoint; v2 folds image, environment, GPUs, scaling and timeouts into one `/serverless` resource, so a deploy is one idempotent upsert, looked up by name.
 
-1. Dry-run the apply. Prints both payloads and calls nothing.
+1. Dry-run the apply. Prints the payload and calls nothing.
 
    ```bash
    export RUNPOD_API_KEY=...
@@ -93,7 +93,7 @@ Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's
        --tag $TAG-slim --dry-run
    ```
 
-   Success: two payloads printed, exit 0. A `latest` tag is refused here with exit 2.
+   Success: one payload printed, exit 0. A `latest` tag is refused here with exit 2.
 
 2. Apply.
 
@@ -102,7 +102,7 @@ Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's
        --tag $TAG-slim
    ```
 
-   Success: exit 0, and the output names the template and endpoint ids. On updates the script bounces `workersMax` 0 → configured automatically, because FlashBoot workers do not re-pull on release (diagnosis table below). Expect ~30s of `409` on submissions during the bounce; `--no-bounce` skips it when stale workers are acceptable. Those four flags — `--config`, `--tag`, `--dry-run`, `--no-bounce` — are the whole interface.
+   Success: exit 0, and the output names the endpoint id. On updates the script bounces `workers.max` 0 → configured automatically, because FlashBoot workers do not re-pull on release (diagnosis table below). Expect ~30s of `409` on submissions during the bounce; `--no-bounce` skips it when stale workers are acceptable. Those four flags — `--config`, `--tag`, `--dry-run`, `--no-bounce` — are the whole interface.
 
 3. Set the console-only fields, on a first deploy or a new endpoint:
 
@@ -110,7 +110,7 @@ Configuration lives in `deploy/endpoints/*.yaml` and is applied through RunPod's
    - **HuggingFace token**: the repo is gated; staging fails without one
    - Leave `WEIGHTS_PATH` **unset**. The worker falls through to `MODEL_CACHE_ROOT` only when it is absent, so setting it would win and the cache would go unused
 
-   The Model field is **console-only**: verified 2026-08-06 by searching the REST OpenAPI (23 paths, zero model fields). Until the API grows it, this is the one setting config-as-code cannot carry, and skipping it produces the exact all-workers-unhealthy signature below.
+   The Model field is **console-only**: verified 2026-08-06 against the v1 OpenAPI (23 paths, zero model fields) and re-verified 2026-08-09 against v2 (`api.runpod.io/v2/openapi.json`: 26 paths, zero model fields). Until the API grows it, this is the one setting config-as-code cannot carry, and skipping it produces the exact all-workers-unhealthy signature below.
 
 4. Prove the image is pullable. **Workers cannot boot until it is.** A GHCR package is private by default even in a public account; the worker's system log shows `error pulling image: ... unauthorized`. Make the package public (github.com/users/OWNER/packages/container/flux-worker/settings) or attach a registry credential. Prove it the way RunPod's daemon sees it — repo visibility is a different setting and proves nothing.
 
@@ -145,8 +145,8 @@ sequenceDiagram
     GHA->>GHCR: verify-tag - docker manifest inspect
     GHCR-->>GHA: manifest exists
     Op->>GHA: approve the runpod environment
-    GHA->>RP: deploy - apply_endpoint.py: upsert template, upsert endpoint, bounce
-    RP-->>GHA: template id, endpoint id
+    GHA->>RP: deploy - apply_endpoint.py: upsert endpoint, bounce
+    RP-->>GHA: endpoint id
     GHA->>EP: smoke-test - pytest -m gpu, 7 e2e cases
     EP-->>GHA: pass or fail
     Note over Op,EP: A failed smoke-test fails the workflow. Rollback is manual - re-run deploy with the previous tag. smoke-test runs in the same runpod environment as deploy.
@@ -183,6 +183,22 @@ to be set once per endpoint by hand.
 
 `smoke-test` sets `CI=true`, under which a missing `RUNPOD_ENDPOINT_ID` is a
 hard `pytest.fail` rather than a skip ([`worker/README.md`](../worker/README.md#develop)).
+
+### Hub listing
+
+`.runpod/` holds the RunPod Hub config, validated against the [publishing guide](https://docs.runpod.io/hub/publishing-guide) 2026-08-09 but **not published**:
+
+- `hub.json` — serverless, image category; `ADA_48_PRO,AMPERE_48,AMPERE_80` pools (the 48GB bf16 floor, plus the benchmarked A100 tier); CUDA `13.0` (the cu130 torch wheels, same reasoning as `deploy/endpoints/cached.yaml`); 20GB container disk; the four `settings.py` env vars as typed inputs; one preset mirroring the deployed defaults.
+- `tests.json` — 5 payloads from the e2e cases (512px/8-step generate, seed echo, 1000→992 snap, empty prompt, blocked prompt), `NVIDIA L40S`, 600s timeouts to absorb a true cold start (measured max 518s).
+- `Dockerfile` — the slim variant. The Hub builder reads only `.runpod/` or the repo root (no path field in `hub.json`), and cannot supply the `HF_TOKEN` secret the bake stage needs. Keep in sync with `worker/Dockerfile`.
+
+Publishing, when wanted:
+
+1. Console → Hub → **Add your repo**, enter the GitHub URL.
+2. Create a GitHub release — the Hub indexes releases, not commits. Each new release re-indexes, usually within an hour.
+3. The Hub builds the image and runs the `tests.json` payloads on its own CI; the listing stays "Pending" until RunPod's manual review.
+
+Known gaps, checked 2026-08-09: `hub.json` has no cached-model field and the Model field is console-only ([Deploy](#deploy) step 3), so Hub CI workers get no weights and `main()`'s pipeline load fails — expect the CI test run to fail until the Hub carries the model store. The two negative payloads end `FAILED` by design, while the documented pass criterion is only an HTTP 200. The README badge renders once the listing is first indexed, not before.
 
 ### Warm it before demonstrating
 
@@ -239,6 +255,61 @@ passed against `localhost:8000` with the compose dev key:
 - real 512×512 4-step job through the live endpoint → `COMPLETED` PNG,
   1.4s inference, staged model revision reported
 
+## Stack pod (the full application)
+
+One CPU pod runs the whole public demo: s6-overlay supervises Postgres 16 and the gateway (uvicorn on 8000) in a single `flux-stack` image; the frontend build is served by the same process (`deploy/stack/serve.py`). Public URL: `https://{pod-id}-8000.proxy.runpod.net`. Durable state — pgdata and the image store — lives on the volume disk at `/workspace`: it survives stop/restart, and is **lost on terminate** (pg_dump first, below).
+
+The frontend is a build stage, not a service. `deploy/stack/Dockerfile` stage 1 is `node:22-slim` running `npm ci && npm run build` over `frontend/`; the runtime stage copies `dist/` to `/app/frontend`, which `FRONTEND_DIST` points at. A failing node stage fails the image build, so an image that pulls always carries a frontend. Two consequences to know before diagnosing anything visual:
+
+- **`404.html` must be in `dist/`.** `serve.py` mounts `StaticFiles(html=True)`, which serves `404.html` — not `index.html` — for an unknown path. `frontend/vite.config.ts` copies `index.html` to `404.html` after the bundle is written; without it every `/jobs/:id` deep link returns a bare 404 instead of booting the router.
+- **Images are served through the gateway** (`GET /v1/jobs/{id}/image`), owner-scoped, from the volume-disk store. The store is capped by `GATEWAY_IMAGE_STORE_MAX_BYTES` (1GiB in `deploy/pods/stack.yaml`), oldest evicted first; the job row survives the eviction and the route answers `410`.
+
+Config as code: `deploy/pods/stack.yaml`, applied by `scripts/apply_pod.py` against REST v2 (`api.runpod.io/v2`). Same idempotence as the endpoint script: look up by name, create if absent, patch if present. Secrets (`RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`, `GATEWAY_API_KEYS`) are read from the apply-time environment, never from the YAML.
+
+### First deploy
+
+1. Build and push. Same tag scheme as the worker, no `-slim` suffix.
+
+   ```bash
+   export TAG=$(make -s print-stack-tag)      # e.g. 0.1.0-abc1234
+   make build-stack
+   docker push ghcr.io/andyozj/flux-stack:$TAG
+   ```
+
+2. Prove the tag is pullable (Deploy, step 4 — same GHCR-private default, package `flux-stack`).
+
+3. Dry-run, then apply. The dry run prints the payload with `<env:NAME>` placeholders — no secret reaches stdout.
+
+   ```bash
+   export RUNPOD_API_KEY=... RUNPOD_ENDPOINT_ID=... GATEWAY_API_KEYS=demo:...
+   python scripts/apply_pod.py --config deploy/pods/stack.yaml --tag $TAG --dry-run
+   python scripts/apply_pod.py --config deploy/pods/stack.yaml --tag $TAG
+   ```
+
+   Success: exit 0, and the output names the pod id and the proxy URL. Flags: `--config`, `--tag`, `--dry-run`, `--no-restart` — the whole interface.
+
+4. Verify: `curl https://{pod-id}-8000.proxy.runpod.net/health` → 200. First boot runs initdb plus migrations; allow ~2 min after the image pull. Then open the URL in a browser, paste the demo key, submit a prompt.
+
+5. Record the tag in the [deploy record](#deploy-record-evidence), endpoint column `flux-stack (pod)`.
+
+Or hands-off: **Actions → deploy-stack → Run workflow** (tag empty = build this ref; a published tag = apply without rebuilding). Same `runpod` environment approval as `deploy.yml`; the workflow's smoke test polls `/health` through the proxy for up to 10 minutes.
+
+### Update
+
+Same apply with a new tag. The script PATCHes the pod and restarts it (`--no-restart` to defer); jobs and images survive because both live on `/workspace`. Expect one gap in availability during the restart — single pod, stated in the design.
+
+### Rollback
+
+Re-apply the previous tag from the deploy record — `python scripts/apply_pod.py --config deploy/pods/stack.yaml --tag <previous-tag>`, or re-run `deploy-stack.yml` with `tag` set. Postgres data is forward-compatible across a rollback only if no migration ran in between; a rollback across a migration needs the dump below restored first.
+
+### Backup before terminate
+
+```bash
+# From the pod's web terminal (or runpodctl exec):
+s6-setuidgid postgres /usr/lib/postgresql/16/bin/pg_dump -h 127.0.0.1 gateway > /workspace/gateway.sql
+# copy it off the pod before terminating; terminate deletes /workspace
+```
+
 ## Rollback
 
 1. Read the previous tag out of the [deploy record](#deploy-record-evidence). That column exists so this step is a lookup, not an investigation.
@@ -268,14 +339,28 @@ Ordered by how often each is actually the cause.
 | Worker starts and dies immediately | `docker inspect $IMAGE:$TAG-slim --format '{{.Architecture}}'` | Image built for arm64 | Must be `amd64`; rebuild with `make build-slim`, which sets `--platform linux/amd64` |
 | Every job fails at startup | Worker logs: `weights_resolved` on success; otherwise a message naming all three mechanisms | Weights not found, or cache holds a different revision | Re-stage the endpoint's cached model |
 | Refuses to start, ambiguous snapshots | Same log line: it reports several candidate snapshots | Cache holds several snapshots and no ref names the staged one | Re-stage the endpoint's cached model, or set `WEIGHTS_PATH` to the intended snapshot |
-| Jobs stuck `IN_QUEUE`, no workers | `GET /v2/{id}/health` → `workers.running` stays 0 | No GPU matching `gpuTypeIds` **and** `allowedCudaVersions` (`cached.yaml`: L40S only, CUDA 13.0 only) | Widen `gpu_types` or `allowed_cuda_versions` in `deploy/endpoints/cached.yaml` and re-apply |
-| Torch fails to initialise CUDA | Worker log: CUDA init error at model load | cu130 wheel on an older host driver | Narrow `allowed_cuda_versions` to 13.x, or repin torch to cu12x and rebuild |
+| Jobs stuck `IN_QUEUE`, no workers | `GET /v2/{id}/health` → `workers.running` stays 0 | No capacity in the configured `gpu.pools` (`cached.yaml`: `ADA_48_PRO` only) | Widen `gpu_pools` in `deploy/endpoints/cached.yaml` and re-apply |
+| Torch fails to initialise CUDA | Worker log: CUDA init error at model load | cu130 wheel on an older host driver — REST v2 dropped v1's `allowedCudaVersions` scheduling filter, so this no longer fails fast at scheduling | Repin torch to cu12x and rebuild |
 | First job slow, later fine | `pipeline_loaded` duration in worker stdout | Normal cold start | Nothing. Warm it before demonstrating (above) |
 | Job fails with `OOM` | Error envelope code is `OOM`; worker logs `oom_detected` | Resolution or step count too high for the GPU | Retry lower. The handler sets `refresh_worker` on the response so RunPod retires the fragmented worker |
 | Gateway 503 `UPSTREAM_UNAVAILABLE`, `Retry-After: 5` | `GET /health/detailed` → `checks.runpod` | Circuit breaker open, or RunPod unreachable | Wait out the breaker cooldown; a half-open probe closes it on the first success |
 | Gateway 429 `QUEUE_SATURATED` | `GET /health/detailed` → `checks.runpod.in_queue` / `workers_running` | Two causes share the code: estimated queue wait over `MAX_QUEUE_WAIT_S` (120s), or that key already at `MAX_ACTIVE_JOBS_PER_KEY` (10) non-terminal jobs | Honour the `Retry-After` header (jittered, floored at 1s). Raise `workers.max`, or raise the per-key cap if one caller is legitimately busy |
 | Job never resolves | `GET /health/detailed` → `checks.reconciler.last_tick_s` climbing; `status: stalled` past 30s | Reconciler loop died | Restart the gateway (`docker compose restart gateway`). In-memory jobs are lost with it |
 | `/status` 404 for a known job | — | Result retention expired (30 min async, 1 min sync) | Nothing to recover; resubmit |
+
+### Stack pod addendum
+
+| Symptom | Check | Likely cause | Fix |
+|---|---|---|---|
+| Proxy URL answers 502 | Pod page: status and container logs. `S6_BEHAVIOUR_IF_STAGE2_FAILS=2` means a failed service kills the container, so a crash-looping pod is the usual shape | Gateway died at startup (missing `GATEWAY_API_KEYS`, bad `DATABASE_URL`) or the image never pulled (GHCR package private) | Logs name the failing service. Fix the env via `apply_pod.py` (PATCH + restart) or make the `flux-stack` package public |
+| 502 persists, logs show `initdb: error` | Container log, `pg-init` output | First boot against a dirty or root-owned `/workspace/pgdata` — a previous failed boot left a partial data dir | From the pod terminal: `rm -rf /workspace/pgdata`, restart the pod. `pg-init` re-runs initdb only when `PG_VERSION` is absent |
+| Jobs 500 on completion, or postgres logs `No space left on device` | Pod page: volume disk usage vs the 20GB in `deploy/pods/stack.yaml` | Volume full: pgdata grows and `GATEWAY_IMAGE_STORE_MAX_BYTES` (1GiB) only caps images | Lower the image cap, or terminate-and-recreate with a larger `volume_gb` (volume size is not patchable; pg_dump first) |
+| Gateway restarts repeatedly, log shows an alembic traceback | Container log around `upgrade_to_head` | Migration failed on boot — the lifespan runs migrations before serving, so the service dies, and s6 restarts it into the same failure | Roll back to the previous tag (schema untouched if the migration failed atomically). If a partial migration stuck: `alembic` stamp/repair from the pod terminal, then redeploy |
+| Requests through the proxy die at ~100s, direct pod access fine | Reproduce with `time curl` — cut at 100s exactly | Cloudflare's 100s cap on the RunPod proxy. Submit-and-poll never approaches it; only a long-lived request (SSE, giant upload) can | Don't hold requests open through the proxy. Anything long-running must become submit-and-poll |
+| Pod healthy, browser shows raw 404 JSON at `/` | `curl -s https://{pod-id}-8000.proxy.runpod.net/` | Frontend build missing from the image (`FRONTEND_DIST` empty) — API-only image built without the node stage completing | Rebuild; the node stage failing fails the build, so this appears only if `FRONTEND_DIST` was overridden |
+| Page loads blank, console shows 404s on `/assets/*.js` | `curl -sI .../assets/<hash>.js` → expect 200 and `content-type: text/javascript` | `dist/` copied incomplete, or the build ran under a non-default Vite `base` so the asset paths do not match the mount at `/` | Rebuild with `npm run build` unmodified (`base` is left at `/`; the app is always served from the root) |
+| `/` works, a `/jobs/:id` deep link or a browser reload on `/gallery` returns 404 | `curl -sI .../jobs/anything` → 404 with an HTML body means the fallback is present; a plain-text body means it is missing. `ls /app/frontend/404.html` on the pod | `dist/404.html` absent — the `spa-404-fallback` plugin in `frontend/vite.config.ts` did not run (built from a stale `dist/`, or the plugin removed) | Rebuild and redeploy. In-app navigation still works, so this only shows on deep links and reloads |
+| Gallery tiles read `image evicted · 410` | `GET /v1/jobs/{id}/image` → 410; check volume usage against `GATEWAY_IMAGE_STORE_MAX_BYTES` | Working as designed: the image store hit its byte cap and evicted oldest-first. The job row, seed and metadata are intact | Nothing to recover — rerun the job's seed to regenerate the same image. Raise the cap only if the volume has room |
 
 ### What is visible from where
 

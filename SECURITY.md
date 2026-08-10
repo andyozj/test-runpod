@@ -51,8 +51,8 @@ Two checkpoints, one shared contract. Terms come from [`contracts/blocklist.json
 ## Known and accepted
 
 - **The RunPod endpoint id is recoverable from git history.** It was redacted from the working docs in `17ebd0c`; earlier commits retain it. Accepted: the id is not a credential and is useless without `RUNPOD_API_KEY`.
-- **No request-rate limit and no spend cap.** The per-key active-job cap bounds concurrency only; a key staying under it can submit indefinitely. There is no per-IP control. Top-ranked open gap; see [`docs/DESIGN.md`](docs/DESIGN.md#known-limits).
-- **The gateway job store is in-memory.** Postgres is specified, not implemented; nothing survives a restart.
+- **No spend cap.** A per-key token bucket (`GATEWAY_RATE_LIMIT_RPM`, default 30, burst 10) bounds submission rate and the active-job cap bounds concurrency, but neither bounds cost: a key staying under both can spend indefinitely. There is no per-IP control — buckets are keyed by credential, so one leaked key from many addresses is one bucket. Top-ranked open gap; see [`docs/DESIGN.md`](docs/DESIGN.md#known-limits).
+- **The gateway job store is in-memory when `DATABASE_URL` is unset.** With it set, `PostgresJobRepository` persists jobs and generated images survive a restart; in memory mode nothing does.
 
 ## Reporting
 

@@ -1,6 +1,6 @@
 # Design decisions and trade-offs
 
-**Date:** 2026-08-07 · **Evidence:** [`BENCHMARKS.md`](../BENCHMARKS.md), [`RUNBOOK.md`](RUNBOOK.md), the code
+**Date:** 2026-08-10 · **Evidence:** [`BENCHMARKS.md`](../BENCHMARKS.md), [`RUNBOOK.md`](RUNBOOK.md), the code
 
 The design record: what was chosen, what was rejected, and what each choice knowingly gave up. Each section carries its reasoning here and links the measurement or code path that tested it. Numbers are quoted from `BENCHMARKS.md` (measured 2026-08-06, N=3-10 per cell) or from the code.
 
@@ -9,10 +9,10 @@ The design record: what was chosen, what was rejected, and what each choice know
 | 1 | Weight delivery | RunPod cached models; baked image a build target, unpublished; volume dropped | Cold start depends on platform staging (p50 89.9s, max 518s); one console-only config field |
 | 2 | Base image | `ubuntu:22.04` + pip torch, not `nvidia/cuda` | No CUDA toolchain in the image; GPU-injection env vars set by hand |
 | 3 | Model revision | Discovered from the staged snapshot; the pin was deleted | Weights can drift with the cache; bounded by reporting and refusal |
-| 4 | Tier split | Worker graded; gateway a fenced spike; contract duplicated, conformance-tested | Five contract files, tests in both suites |
+| 4 | Tier split | Worker graded; gateway a spike, hostable as the stack pod; contract duplicated, conformance-tested | Five contract files, tests in both suites |
 | 5 | Interface | Async-only: submit, poll | A bare `curl` is two commands |
-| 6 | Result | Inline base64, no object storage | ~2.7MB re-sent on every poll of a completed job |
-| 7 | Gateway architecture | Ports-and-adapters over an in-memory repository | Jobs lost on restart; three invariants left to the Postgres port |
+| 6 | Result | Inline base64 from the worker, no object storage | ~2.7MB re-sent on every poll of a completed job; the gateway's disk store absorbs it only for its own callers |
+| 7 | Gateway architecture | Ports-and-adapters; memory first, Postgres now bound behind the same port | Three invariants restated in SQL; memory mode still loses jobs on restart |
 | 8 | Load shedding | 429 on estimated wait, not queue depth; fails open | Estimate is a lower bound; a dead reconciler admits everything |
 | 9 | Idempotency | Insert-first; replay by row identity; key released on shed | A request hash per row; ordering constraints in `submit` |
 | 10 | Completion | Reconciler polling, lease + derived submit grace | Up to one 2s tick of phantom latency; N replicas = N pollers |
@@ -20,8 +20,9 @@ The design record: what was chosen, what was rejected, and what each choice know
 | 12 | Negative prompts | Not exposed | A schema change to add later |
 | 13 | GPU and defaults | Chosen by \$/image, not \$/hr | 28-step default kept despite 20 steps being 28% cheaper |
 | 14 | CI/CD | Tag-driven versioning; checks gate everything; deploys human-only | Post-deploy smoke test detects, does not prevent; rollback is manual |
-| 15 | Observability | `structlog` JSON to stdout; one correlation ID; log-based health series | No metrics export, no tracing |
+| 15 | Observability | `structlog` JSON to stdout; one correlation ID; log-based health series; `/v1/metrics` as a ledger read model | No scrape target, no tracing, no alerting |
 | 16 | Testing | GPU-free unit/integration; contract conformance; recording fakes | Platform divergence caught only by e2e |
+| 17 | Frontend | A cockpit over the gateway; identity derived, not picked; no kit, no chart library, no WebGL; polling | Hand-rolled primitives; screenshot baselines are darwin-only, so the suite stays out of CI |
 
 ## 1. Weight delivery: cached models, not baked, not a volume
 
@@ -59,7 +60,7 @@ The design record: what was chosen, what was rejected, and what each choice know
 
 **Context.** The worker alone satisfies the brief. The gateway (auth, idempotency, reconciler, load shedding) is beyond it.
 
-**Choice.** The gateway is built as a fenced spike: local `docker compose` only, never hosted. Hosting adds nothing demonstrable — the endpoint is a public URL regardless — and adds a live liability: a credential-backed GPU spender exposed continuously with no per-key quota (the top-ranked gap, see [`SECURITY.md`](../SECURITY.md) §Known and accepted). Package isolation is enforced by construction: separate virtualenvs, so torch can never reach the gateway nor FastAPI the worker.
+**Choice.** The gateway stays a spike — the endpoint is a public URL without it — but it is no longer fenced to `docker compose`. Hosting was refused while the only per-key control was a concurrency cap: a credential-backed GPU spender exposed continuously with no request-rate limit. That control exists now (`adapters/ratelimit`, per-key token bucket), so hosting is a built path instead: `deploy/stack/` packages frontend, gateway and Postgres into one CPU pod, applied by `scripts/apply_pod.py` or `deploy-stack.yml`. Spend is still uncapped ([Known limits](#known-limits)), so running one is a deliberate act with a live bill, not a default. Package isolation is enforced by construction: separate virtualenvs, so torch can never reach the gateway nor FastAPI the worker.
 
 **Trade-off accepted.** Isolation forbids a shared package, so the contract exists twice. Options weighed: a third package (a third `pyproject.toml`, lockfile, and publish step for ~10 fields), relaxing isolation (loses the guarantee keeping both images honest), or duplicating with drift made detectable. Duplication won. Five files at the root — `contracts/generation-request.schema.json`, `error-codes.json`, `blocklist.json`, `normalisation.json`, `guardrail-corpus.json` — are the source of truth; both suites assert conformance, so changing a field fails both packages until both follow. The behaviour a shared package would have bought, without shipping a third package.
 
@@ -81,23 +82,25 @@ The design record: what was chosen, what was rejected, and what each choice know
 
 **Choice.** Reverted to inline base64. RunPod's surface is fixed — `GET /status/{job_id}` returns the handler's output verbatim, and there is nowhere else a direct caller can fetch from — so a storage key hands the reviewer a reference they cannot resolve without running the gateway. The graded tier must not depend on the ungraded one.
 
-**Trade-off accepted.** ~2.7MB per completed-job poll, and no pushed transport can carry the result. Measured at the worst case: 1536² PNG is 2.85MB base64, JPEG 0.49MB (5.8x smaller), both inside the platform caps. Object storage is an open gap — built once, removed as inert, to be re-added when a caller needs a pushed result.
+**Trade-off accepted.** ~2.7MB per completed-job poll for a direct caller, and no pushed transport can carry the result. Measured at the worst case: 1536² PNG is 2.85MB base64, JPEG 0.49MB (5.8x smaller), both inside the platform caps. The gateway absorbs the repeat cost for its own callers rather than the worker: in Postgres mode it decodes once to a byte-capped filesystem store and its poll returns `image_url` plus a ~25-byte thumbhash (`adapters/images`), so only the first fetch of the bytes is large. That is a local store, not object storage — a pushed result still has nowhere to go.
 
 **Evidence.** [`BENCHMARKS.md`](../BENCHMARKS.md) response-payload table; `worker/src/worker/handler.py`.
 
-## 7. Ports-and-adapters, in-memory persistence
+## 7. Ports-and-adapters: memory first, Postgres behind the same port
 
-**Context.** The gateway needs a job store; Postgres is the specified production store, unimplemented.
+**Context.** The gateway needs a job store; Postgres is the specified production store.
 
-**Choice.** `core/` declares `Protocol` interfaces and imports nothing outward — enforced by `import-linter` in `make check`, not review. Persistence is `InMemoryJobRepository` behind the same protocol: a compose file starting a database nothing needs would be scenery. The swap is one binding in the composition root (`gateway/src/gateway/main.py`).
+**Choice.** `core/` declares `Protocol` interfaces and imports nothing outward — enforced by `import-linter` in `make check`, not review. Persistence shipped as `InMemoryJobRepository` behind that protocol; `PostgresJobRepository` (asyncpg, Alembic migrations in `gateway/migrations/` applied inside the lifespan) now sits behind the same one. The swap is the single binding the design predicted: `DATABASE_URL` in the composition root (`gateway/src/gateway/main.py`) selects Postgres plus the filesystem image store, or memory with results inline. Compose and the stack pod set it; the test fakes and the unset mode do not. `gateway/tests/contract/test_job_repository.py` is one suite over both adapters — memory always, Postgres (38 cases) when `DATABASE_URL_TEST` names a disposable database.
 
-**Trade-off accepted.** Jobs do not survive a restart, and three invariants the in-memory adapter gets from a single `asyncio.Lock` become the Postgres port's obligations, documented at their sites:
+**Trade-off accepted.** The three invariants the in-memory adapter gets free from a single `asyncio.Lock` had to be restated in SQL, each at a stated cost:
 
-- **Atomic idempotent insert** — insert first, catch the unique violation on `(api_key_id, idempotency_key)`, return the existing row. Check-then-insert has exactly the race idempotency exists to prevent.
-- **Claim leasing** — `claim_unresolved` takes `lease_s` and models `FOR UPDATE SKIP LOCKED`: a claimed job is invisible to other callers until released or expired. Redundant with one reconciler; the difference between polling once and racing on the write with two.
-- **Race-safe cap counting** — `JobService._check_active_job_cap` is correct today only because the in-memory `count_active` never awaits, so nothing interleaves between insert and count. A database `count_active` is real I/O and reopens the check-then-act race unless the repository enforces the cap itself (atomic insert-and-count or a per-key row lock). The docstring says so, so the port inherits a requirement, not a surprise.
+- **Atomic idempotent insert** — a partial unique index on `(api_key_id, idempotency_key)` plus `ON CONFLICT`, returning the existing row. Check-then-insert has exactly the race idempotency exists to prevent.
+- **Claim leasing** — `claim_unresolved(lease_s=...)` is `FOR UPDATE SKIP LOCKED` plus a `lease_expires_at` column: a claimed job is invisible to other callers until released or expired. Redundant with one reconciler; the difference between polling once and racing on the write with two.
+- **Race-safe cap counting** — `JobService._check_active_job_cap` is correct in memory only because `count_active` never awaits. In SQL the triggering row is inserted before it is counted, so concurrent submissions can over-count and reject; they can never admit past the cap. A spurious reject is retryable, an admitted overrun is billed GPU time.
 
-**Evidence.** [`STANDARDS.md`](../STANDARDS.md) §3; `gateway/src/gateway/adapters/memory.py` (lease and lock docstrings); `gateway/src/gateway/core/service.py` (cap race note).
+Memory stays the adapter for tests and for `DATABASE_URL` unset: no database, multi-MB images inline in the response, terminal jobs evicted after an hour, everything lost on restart. Neither mode is multi-instance — Postgres makes the store shared, but the queue-health cache, the rate-limit buckets and the reconciler remain per-process.
+
+**Evidence.** [`STANDARDS.md`](../STANDARDS.md) §3; `gateway/src/gateway/adapters/postgres.py`, `memory.py`; `gateway/migrations/`; `gateway/tests/contract/test_job_repository.py`; [`gateway/README.md`](../gateway/README.md) §Persistence.
 
 ## 8. Shed on estimated wait, not queue depth
 
@@ -143,7 +146,7 @@ The design record: what was chosen, what was rejected, and what each choice know
 
 **Trade-off accepted.** The worker's check spends billed GPU milliseconds on every job, and the blocklist is matching machinery, not a classifier — it stops naive cases and proves the hook is wired; real classification is the unbuilt chain member.
 
-**Evidence.** `worker/src/worker/guardrails.py`, `gateway/src/gateway/core/guardrails.py`; `contracts/blocklist.json`, `normalisation.json`, `guardrail-corpus.json`; both suites assert identical verdicts over the shared corpus.
+**Evidence.** `worker/src/worker/guardrails.py`, `gateway/src/gateway/adapters/guardrails.py`; `contracts/blocklist.json`, `normalisation.json`, `guardrail-corpus.json`; both suites assert identical verdicts over the shared corpus.
 
 ## 12. No negative prompt
 
@@ -181,9 +184,11 @@ The design record: what was chosen, what was rejected, and what each choice know
 
 **Choice.** `structlog` with a JSON renderer everywhere; `print` is banned by ruff `T20` ([`STANDARDS.md`](../STANDARDS.md) §2). One correlation ID from HTTP header through the job row and the RunPod payload into the worker's log context and back on every error envelope; `runpod_job_id` is logged beside it so our logs join RunPod's. The reconciler's health fetch is emitted as an `endpoint_health` line per 2s tick — a log-based time series of queue depth and worker counts, one upstream call feeding three consumers (shedding, `/health/detailed`, the series). Prompts are logged as an 80-character preview plus length: a hash makes bad-image reports unanswerable, full text is unbounded user content in a log store.
 
-**Trade-off accepted.** No metrics export, no alerting, no spans — correlation without latency breakdown. Cold-start *failures* are invisible from every surface: the container never reaches the handler, so nothing is emitted, and only synthetic probing detects them. Stated in the runbook rather than discovered.
+`GET /v1/metrics` was added later for the frontend's Operate view: per-key job counts, latency percentiles, hourly throughput and an estimated cost, computed from the job ledger by SQL aggregates. A read model over rows already stored, not an instrumentation layer — nothing new is measured to serve it.
 
-**Evidence.** [`STANDARDS.md`](../STANDARDS.md) §8; `gateway/src/gateway/observability/`, `worker/src/worker/logging.py`; [`RUNBOOK.md`](RUNBOOK.md) §What is visible from where.
+**Trade-off accepted.** No scrape target, no alerting, no spans — correlation without latency breakdown, and `/v1/metrics` sees only what the ledger holds (nothing about the process itself, and in memory mode only the last hour). Cold-start *failures* are invisible from every surface: the container never reaches the handler, so nothing is emitted, and only synthetic probing detects them. Stated in the runbook rather than discovered.
+
+**Evidence.** [`STANDARDS.md`](../STANDARDS.md) §8; `gateway/src/gateway/main.py:configure_logging`, `api/app.py` (correlation id), `worker/src/worker/handler.py`; [`gateway/README.md`](../gateway/README.md) §Metrics; [`RUNBOOK.md`](RUNBOOK.md) §What is visible from where.
 
 ## 16. Testing: the constraint is the architecture
 
@@ -195,18 +200,35 @@ The design record: what was chosen, what was rejected, and what each choice know
 
 **Evidence.** [`STANDARDS.md`](../STANDARDS.md) §9; `worker/tests/`, `gateway/tests/`; [`README.md`](../README.md#current-state) §Current state for counts.
 
+## 17. The frontend is an instrument, not a demo front door
+
+**Context.** The gateway emits seeds, model revisions, stage progress, latency percentiles, queue readings and correlation ids that nothing rendered. A demo front door — one prompt box, one image — would have hidden all of it.
+
+**Choice.** A cockpit with three views: generate, ledger, operate. The identity was **derived, not picked**: a council of five, asked which of four candidate personas to adopt, converged on the one that follows from what the frontend can *prove* on screen (First-Principles), against costume aesthetics chosen by adjective in a repo whose ethos is numbers over adjectives (Outsider). WebGL was cut in the same verdict. Consequences, not decoration: single dark theme, monospace numerics, one amber accent, and the rule that an element which does not render backend data justifies itself or dies.
+
+Four sub-choices follow from it:
+
+- **No charting library.** The three visualisations are a 246×40 sparkline, 24 throughput bars and four latency bars — hand-written SVG, ~380 lines total. A charting library is heavier than the charts.
+- **No component kit.** The design spec said "shadcn primitives restyled, not rebuilt"; the build hand-rolled them instead, because the two modals are native `<dialog>` + `showModal()` — the platform already gives the focus trap, the inert backdrop and Escape, which is most of what a kit's dialog is for. Eight runtime dependencies, no router and no state library.
+- **Client-side polling, not SSE.** `GET /v1/jobs/{id}` every 1 s for 60 s, then every 2 s. The gateway's own completion path is reconciler polling (§10), so streaming would need a new backend surface, and the RunPod proxy's 100 s Cloudflare cap makes a long-lived connection a liability that submit-and-poll is immune to.
+- **Batch and sweep, not a single generate button.** A batch varies only the seed (`seed, seed+1, …` when locked); a sweep runs exactly four cells varying one parameter with the seed held constant — steps 4/12/20/28, guidance 1/3.5/7/10, size 512/768/1024/1280. Both stamp each cell with its measured wall time, so the parameter's cost is priced on screen rather than asserted. Teaching by measurement: every duration is observed, and the two estimates on the whole surface are labelled `~` and sourced from `BENCHMARKS.md`.
+
+**Trade-off accepted.** Hand-rolled primitives are ours to maintain, and correctness lives in the test suite rather than in a library's. Polling costs up to one 1 s tick of phantom latency per cell and one request per second per in-flight job. Batch grouping is client-side and session-only — the wire has no batch field — so a reload loses the grouping. The screenshot baselines are `-darwin` only, so the Playwright suite is not in CI: a Linux runner would regenerate rather than compare, and the functional assertions would pass while the pixels did not.
+
+**Evidence.** [`frontend/README.md`](../frontend/README.md); `docs/superpowers/decisions/DECISION_LOG.md` (2026-08-09, council verdict and approval gate) and `docs/superpowers/specs/2026-08-09-frontend-design-direction.md`; `frontend/src/lib/bench.ts` for every sourced constant; `frontend/tests/` (67 tests across three specs, driven by the in-browser mock).
+
 ## Known limits
 
 What the current design does not do, each with the reason that is acceptable for this repo's purpose.
 
-- **Single-process gateway.** Breaker state and the health cache are in-memory; N replicas means N reconcilers. One local compose instance is the deployment; the multi-instance requirements are specified (lease semantics, shared breaker state) rather than built.
-- **In-memory persistence.** Jobs are lost on restart and evicted after an hour. Postgres is one binding away behind the same protocol; a database nothing demonstrable needs would be scenery.
-- **No per-key rate limit or spend cap.** `MAX_ACTIVE_JOBS_PER_KEY=10` bounds concurrent jobs, not request rate or spend; a key under the cap can submit indefinitely. Top-ranked gap, and the reason the gateway is not hosted; also recorded in [`SECURITY.md`](../SECURITY.md).
+- **Single-process gateway.** Breaker state, the health cache and the rate-limit buckets are in-memory; N replicas means N reconcilers and N × `GATEWAY_RATE_LIMIT_RPM` per key. Postgres shares the job store, not those; one instance is the deployment, and the multi-instance requirements are specified (lease semantics, shared breaker and bucket state) rather than built.
+- **Memory mode loses jobs.** With `DATABASE_URL` unset the gateway keeps jobs in memory: lost on restart, terminal jobs evicted after an hour, images inline. Compose and the stack pod set `DATABASE_URL`, so this is the test and no-database configuration, not the deployed one.
+- **No spend cap.** `GATEWAY_RATE_LIMIT_RPM=30` / `BURST=10` bounds a key's request rate and `MAX_ACTIVE_JOBS_PER_KEY=10` its concurrent jobs, but nothing bounds cumulative spend: a key submitting at the permitted rate bills indefinitely. Top-ranked remaining gap; also recorded in [`SECURITY.md`](../SECURITY.md).
 - **No rate limiting by IP.** Every `/v1` route already requires a key; anonymous traffic never reaches a spend path, so identity-based controls come first.
 - **Endpoint id appears in git history.** Redacted from the tree (`17ebd0c`), not from history. Accepted: calling the endpoint requires the RunPod API key regardless, and the id is supplied to the reviewer anyway.
 - **The endpoint is a second door with one shared key.** Account-scoped, identical for every holder, not narrowable. Not closable from this side; mitigated by key hygiene and by duplicating the guardrail into the worker.
 - **Benchmark N is 3-10 per cell.** Enough to rank options, not SLO-grade percentiles; `BENCHMARKS.md` says so in its own header.
 - **Prompt length is a proxy.** The 2000-character cap approximates T5's 512-token limit; a dense prompt inside the cap truncates silently. Exact validation means loading the tokenizer for a rare case.
-- **`flag` verdicts have no consumer.** Recorded from day one so a review queue starts with history; today `flag` is `allow` plus an audit line.
+- **The guardrail vocabulary is `allow`/`block` only.** `Action = Literal["allow", "block"]`; there is no `flag` tier and no review queue, so a borderline prompt is either served or refused with nothing in between.
 - **One manual deploy step.** The cached-model Model field is console-only; recorded in the runbook, to be folded into `apply_endpoint.py` when the API grows the field.
 - **Single region, no backup drill, no load test.** The failure domains of a real service, out of scope for a graded exercise; named here rather than left implied.

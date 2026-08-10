@@ -1,5 +1,7 @@
 # FLUX.1-dev on RunPod Serverless
 
+[![RunPod](https://api.runpod.io/badge/andyozj/test-runpod)](https://console.runpod.io/hub/andyozj/test-runpod)
+
 A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, deployed on RunPod using cached models (the platform pre-stages the weights on host machines). The baked-weights image is a one-command build target (`make build-baked`), not deployed; see [Weight delivery](#weight-delivery).
 
 > **Status:** live and verified 2026-08-06. Endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-b8d1f76-slim` (deployed via `deploy.yml`), 48GB GPU tier, weights via RunPod's model store. 7/7 e2e cases pass against it; committed samples with seeds in [`samples/`](samples/); measured results in [`BENCHMARKS.md`](BENCHMARKS.md) (156 records, raw data committed).
@@ -8,13 +10,14 @@ A serverless text-to-image endpoint running `black-forest-labs/FLUX.1-dev`, depl
 
 ## What's here
 
-One deliverable and two spikes. The spikes sit beside the brief, not inside it: each is self-contained, carries its own README, and the endpoint is callable without either.
+One deliverable and three spikes. The spikes sit beside the brief, not inside it: each is self-contained, carries its own README, and the endpoint is callable without any of them.
 
 | Tier | Where | What it is |
 |---|---|---|
 | **The deliverable** | [`worker/`](worker/), [`worker/Dockerfile`](worker/Dockerfile), [`deploy/endpoints/`](deploy/endpoints/), [`scripts/apply_endpoint.py`](scripts/apply_endpoint.py), [`docs/RUNBOOK.md`](docs/RUNBOOK.md), [`samples/`](samples/), [`client/generate.py`](client/generate.py) | The brief: handler, image, deployed endpoint, demo client, operations. Request lifecycle and package details in [`worker/README.md`](worker/README.md) |
 | **Spike: benchmarks** | [`benchmarks/`](benchmarks/), [`BENCHMARKS.md`](BENCHMARKS.md) | What the endpoint actually does under one variable at a time: steps, resolution, payload, concurrency, cold starts. Its rendered report backs every number quoted below. [`benchmarks/README.md`](benchmarks/README.md) |
-| **Spike: gateway** | [`gateway/`](gateway/) | A production-shaped API tier in front of the endpoint: auth, idempotency, job store, reconciler. Endpoints, and the fence, in [`gateway/README.md`](gateway/README.md) |
+| **Spike: gateway** | [`gateway/`](gateway/) | A production-shaped API tier in front of the endpoint: auth, per-key rate limit, idempotency, Postgres job store, image store, reconciler. Routes, persistence modes and what is not built in [`gateway/README.md`](gateway/README.md) |
+| **Spike: frontend** | [`frontend/`](frontend/) | The cockpit for the gateway — generate, ledger, operate — where every element on screen renders data the backend already emits. Views, the mock, and the known limits in [`frontend/README.md`](frontend/README.md) |
 
 The design record is [`docs/DESIGN.md`](docs/DESIGN.md). Engineering conventions in [`STANDARDS.md`](STANDARDS.md). That file doubles as the working guide for the agentic coding process used to build this repo, so it spells out rules a human reviewer would take as given.
 
@@ -94,10 +97,15 @@ has nothing left to return.
 
 While a job runs, `status` polls return progress, throttled to ~10% strides
 (each report costs a platform round trip, so per-step updates would tax the
-GPU loop for nothing):
+GPU loop for nothing). Each stride carries a latent preview — the packed
+latents projected to RGB, capped at 192px, JPEG, ~1-12kB — unless
+`PREVIEW_ENABLED=false`. Preview rendering fails open: a crash there drops the
+frame, never the update:
 
 ```json
-{"status": "IN_PROGRESS", "output": {"step": 12, "total": 28, "percent": 43}}
+{"status": "IN_PROGRESS",
+ "output": {"step": 12, "total": 28, "percent": 43,
+            "preview_b64": "/9j/4AAQ...", "preview_format": "jpeg"}}
 ```
 
 ## Input
@@ -195,7 +203,7 @@ docker push ghcr.io/andyozj/flux-worker:$(make -s print-tag)-slim
 
 Versioning is tag-driven: the most recent `v*` git tag names the version, the commit SHA makes the image tag immutable, and `make print-tag` shows the result. Override `IMAGE`/`TAG` on the command line for another registry. `--platform linux/amd64` is set in the Makefile; without it an arm64 build produces an image RunPod cannot run (symptoms in the [RUNBOOK](docs/RUNBOOK.md#diagnosis)).
 
-CD: `.github/workflows/deploy.yml` runs CI, builds, pushes and applies from one button (rollback = re-run with the previous tag); a `v*` tag push publishes the image without deploying. Details in the [RUNBOOK](docs/RUNBOOK.md). When something is broken, start at its [Diagnosis](docs/RUNBOOK.md#diagnosis) table: symptom, likely cause, the check that settles it, ordered by how often each is actually the cause.
+CD: `.github/workflows/deploy.yml` runs CI, builds, pushes and applies from one button (rollback = re-run with the previous tag); a `v*` tag push publishes the image without deploying. The worker endpoint and the stack pod are separate paths: `deploy-stack.yml` applies `deploy/pods/stack.yaml` via `scripts/apply_pod.py`. Details in the [RUNBOOK](docs/RUNBOOK.md). When something is broken, start at its [Diagnosis](docs/RUNBOOK.md#diagnosis) table: symptom, likely cause, the check that settles it, ordered by how often each is actually the cause.
 
 ### Weight delivery
 
@@ -230,7 +238,7 @@ Two details that will otherwise cost you an hour each:
 
 ## Design
 
-The delivered system is caller → RunPod → worker; the gateway box is a spike beyond the brief, and `contracts/` is what binds the two tiers.
+The delivered system is caller → RunPod → worker; the gateway and frontend boxes are spikes beyond the brief, and `contracts/` is what binds the two tiers.
 
 ```mermaid
 graph LR
@@ -252,11 +260,12 @@ graph LR
   subgraph gw["gateway/ - spike, beyond the brief"]
     http["api/app.py<br/>POST /v1/jobs"] --> svc["core/service.py"]
     svc --> gwguard["adapters/guardrails.py"]
-    svc --> store["adapters/memory.py<br/>in-memory job store"]
+    svc --> store["adapters/postgres.py (DATABASE_URL set)<br/>adapters/memory.py (unset)"]
     svc --> rp["adapters/runpod_client.py"]
     rec["workers/reconciler.py"] --> svc
   end
   rp -- "POST run, GET status" --> api
+  fe["frontend/ - spike, beyond the brief<br/>generate, ledger, operate"] -- "POST /v1/jobs, GET /v1/jobs, /v1/metrics" --> http
 
   ct["contracts/<br/>blocklist.json<br/>normalisation.json<br/>error-codes.json"] -.-> guard
   ct -.-> gwguard
@@ -278,6 +287,7 @@ Decisions and their trade-offs, including the options rejected and what is delib
 
 ```mermaid
 flowchart LR
+    fe["frontend (spike)"] -->|"same origin, no CORS"| gw
     caller["any caller"] -->|"POST /v1/jobs"| gw["gateway (spike)"]
     client["client/generate.py"] -->|"/run, /status"| rp["RunPod serverless"]
     gw -->|"/run, /status"| rp
@@ -359,9 +369,13 @@ BENCHMARKS.md        measured results: rendered, never hand-written
 benchmarks/          spike: harness.py, config.json, raw.jsonl (the evidence)
 samples/             committed generations with their seeds
 gateway/             spike: FastAPI tier beyond the brief (gateway/README.md)
+frontend/            spike: the cockpit UI, React + Vite (frontend/README.md)
+deploy/stack/        the full-stack pod image: frontend build + gateway + postgres
 deploy/endpoints/    endpoint configuration as code
-scripts/             apply_endpoint.py
+deploy/pods/         stack.yaml: the pod configuration apply_pod.py applies
+scripts/             apply_endpoint.py, apply_pod.py (both REST v2)
 docs/RUNBOOK.md      build, deploy, rollback, diagnosis
+.runpod/             Hub listing config: hub.json, tests.json, Hub-build Dockerfile (docs/RUNBOOK.md#hub-listing)
 docs/DESIGN.md       the design record: decisions and trade-offs
 STANDARDS.md         engineering conventions; guide for the agentic workflow
 CONTRIBUTING.md      workflow, gates, review expectations
@@ -375,9 +389,10 @@ SECURITY.md          reporting a vulnerability
 |---|---|
 | Endpoint | **Live** since 2026-08-06; 7/7 e2e cases pass, three samples committed with seeds |
 | Image | `ghcr.io/andyozj/flux-worker:0.1.0-b8d1f76-slim`, 2.9GB, public, no secrets in any layer |
-| Worker | 97 unit tests (no GPU required) + 7 e2e against the live endpoint |
+| Worker | 108 unit tests (no GPU required) + 7 e2e against the live endpoint |
 | `BENCHMARKS.md` | Measured 2026-08-06; 156 records incl. an A100 cross-tier run, raw JSONL committed, methodology in its own header |
-| Gateway | Spike, beyond the brief: core, async API, reconciler, 240 tests; containerised and in CI alongside the worker |
+| Gateway | Spike, beyond the brief: core, async API, reconciler, Postgres or memory store, 370 database-free tests plus 38 Postgres contract cases; containerised and in CI alongside the worker |
+| Frontend | Spike, beyond the brief: three views (generate, ledger, operate), 67 Playwright tests against an in-browser mock, 20 screenshot baselines; built into the stack pod image, not in CI |
 
 ## Author
 
