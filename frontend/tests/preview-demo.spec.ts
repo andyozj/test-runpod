@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test'
 
 test('preview flow demo', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('gateway-key', 'demo:local-development-key')
+    localStorage.setItem('gateway-key', 'local-development-key')
     // demo pacing: ~1 progress stride per poll so all 4 preview frames appear
     localStorage.setItem('MOCK_DEMO', '1')
   })

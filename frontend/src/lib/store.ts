@@ -62,10 +62,11 @@ export function setKey(key: string | null): void {
   emit({ ...state, key })
 }
 
+/** Whether a key is held. The caller never learns its `api_key_id`: the
+ * gateway resolves that server-side from the secret and returns it in no
+ * response, so any id rendered here would be a guess. */
 export function keyId(key: string | null): string | null {
-  if (!key) return null
-  const idx = key.indexOf(':')
-  return idx > 0 ? key.slice(0, idx) : 'key'
+  return key ? 'set' : null
 }
 
 export function noteCorrelationId(id: string): void {

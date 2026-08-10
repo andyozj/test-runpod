@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw'
+import { COLD_QUEUE_MS } from '../hooks/useBatch'
 import type {
   ErrorBody,
   JobStatus,
@@ -192,6 +193,15 @@ function fast(): boolean {
   return localStorage.getItem('MOCK_FAST') === '1'
 }
 
+/**
+ * 'demo:cold' has to out-queue COLD_QUEUE_MS or the completed card shows no
+ * cold split — derived from the threshold so the two cannot drift. Fast mode
+ * pays the full ~22.5s here; every other scenario stays sub-second.
+ */
+function coldQueuedMs(isFast: boolean): number {
+  return isFast ? COLD_QUEUE_MS + 2500 : Math.max(45_000, COLD_QUEUE_MS + 2500)
+}
+
 function timing(scenario: Scenario) {
   // demo pacing: ~1 stride per poll so every preview frame is observed on video
   if (localStorage.getItem('MOCK_DEMO') === '1') {
@@ -200,7 +210,7 @@ function timing(scenario: Scenario) {
   const isFast = fast()
   return {
     queuedMs:
-      scenario === 'cold' ? (isFast ? 8000 : 45_000) : isFast ? 600 : 2000,
+      scenario === 'cold' ? coldQueuedMs(isFast) : isFast ? 600 : 2000,
     strideMs: isFast ? 300 : 200,
   }
 }
@@ -785,7 +795,7 @@ function unauthorized(request: Request) {
       401,
       'UNAUTHENTICATED',
       'Missing or invalid API key.',
-      'Send Authorization: Bearer <key_id:secret>.',
+      'Send Authorization: Bearer <secret>.',
     )
   }
   return null

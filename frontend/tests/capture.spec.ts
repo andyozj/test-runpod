@@ -6,7 +6,7 @@ const OUT = process.env.CAPTURE_DIR ?? 'capture'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('gateway-key', 'demo:local-development-key')
+    localStorage.setItem('gateway-key', 'local-development-key')
     localStorage.setItem('MOCK_FAST', '1')
   })
 })

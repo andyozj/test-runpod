@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
   })
   page.on('pageerror', (err) => consoleErrors.push(String(err)))
   await page.addInitScript(() => {
-    localStorage.setItem('gateway-key', 'demo:local-development-key')
+    localStorage.setItem('gateway-key', 'local-development-key')
     localStorage.setItem('MOCK_FAST', '1')
   })
 })
@@ -675,7 +675,7 @@ test('api requests carry an abort signal (30s timeout)', async ({ page }) => {
 
 test('key popover: aria wiring and focus restored on Esc', async ({ page }) => {
   await page.goto('/')
-  const trigger = page.getByRole('button', { name: 'key demo' })
+  const trigger = page.getByRole('button', { name: 'key set' })
   await expect(trigger).toHaveAttribute('aria-haspopup', 'dialog')
   await trigger.click()
   await expect(trigger).toHaveAttribute('aria-controls', 'key-popover')
@@ -1364,7 +1364,7 @@ test('pre-key: prompt bar visibly disabled, demo key is one click', async ({
   // the one-click demo key unlocks the instrument
   await page.getByRole('button', { name: /use demo key/ }).first().click()
   await expect(page.getByLabel('Prompt')).toBeEnabled()
-  await expect(page.locator('footer').getByText('demo', { exact: true })).toBeVisible()
+  await expect(page.locator('footer').getByText('set', { exact: true })).toBeVisible()
 })
 
 const RESPONSIVE_VIEWPORTS = [

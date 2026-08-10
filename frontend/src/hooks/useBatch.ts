@@ -57,8 +57,13 @@ export const IDLE_RUN: JobRun = {
 
 const COLD_START_NOTE = 'likely cold start — platform staging can take minutes'
 
-/** Queued longer than this marks the run's wall time as a cold measurement. */
-export const COLD_QUEUE_MS = 3000
+/** Queued longer than this marks the run's wall time as a cold measurement.
+ *
+ * Warm dispatch against the live endpoint measured 6-10s queued with three
+ * idle workers (2026-08-10), so the earlier 3s threshold labelled every real
+ * job cold. 20s sits above warm dispatch and below the 89.9s cold p50 in
+ * BENCHMARKS.md. */
+export const COLD_QUEUE_MS = 20_000
 
 /** Duration a completed run spent queued; 0 if never observed. */
 export function queuedMsOf(run: JobRun): number {

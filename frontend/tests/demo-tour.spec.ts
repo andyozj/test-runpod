@@ -6,7 +6,7 @@ const beat = (page: Page, ms = 1200) => page.waitForTimeout(ms)
 
 test('full product tour', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('gateway-key', 'demo:local-development-key')
+    localStorage.setItem('gateway-key', 'local-development-key')
     localStorage.setItem('MOCK_DEMO', '1')
   })
 

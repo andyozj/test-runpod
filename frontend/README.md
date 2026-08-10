@@ -72,7 +72,7 @@ The sourced constants live in one file, `src/lib/bench.ts`, each carrying the ta
 | `BENCH_RECORD_COUNT` | 156 | committed benchmark records; the session's first job is "data point 157" |
 | `COLD_TOOLTIP` | cold p50 90 s, resume 16 s, warm 0.1 s | cold-start table, quoted wherever a cold queue is flagged |
 
-The sparkline plots the session's own wall times against that band, hollow-marking any run whose queue exceeded 3 s as a likely cold start. Cost is the only panel that says *estimated*, and it states its basis: measured execution seconds × the GPU rate, over the metrics window.
+The sparkline plots the session's own wall times against that band, hollow-marking any run whose queue exceeded 20 s as a likely cold start (warm dispatch measures 6-10 s queued; the cold p50 is 89.9 s). Cost is the only panel that says *estimated*, and it states its basis: measured execution seconds × the GPU rate, over the metrics window.
 
 ## Run it
 
@@ -86,7 +86,7 @@ cd frontend && npm ci
 npm run dev          # http://localhost:5173
 ```
 
-Vite proxies `/v1` and `/health` to `http://localhost:8000`, so there is no CORS and no base-URL configuration. Paste `demo:local-development-key` into the key popover — or press *use demo key* on the pre-key state. The key is kept in `localStorage`, sent as `Authorization: Bearer`, and cleared on any 401.
+Vite proxies `/v1` and `/health` to `http://localhost:8000`, so there is no CORS and no base-URL configuration. Paste `local-development-key` into the key popover, or press *use demo key* on the pre-key state. The bearer token is the secret alone, not the `id:secret` pair from `GATEWAY_API_KEYS`: `Settings.resolve_key` hashes only the secret, so sending the pair 401s. The key is kept in `localStorage`, sent as `Authorization: Bearer`, and cleared on any 401.
 
 **Against the in-browser mock** — no gateway, no GPU, no credentials:
 

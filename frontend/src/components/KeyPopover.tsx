@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { keyId, setKey, setKeyPopoverOpen, useAppState } from '../lib/store'
 
-const DEMO_KEY = 'demo:local-development-key'
+// The bearer token is the secret alone. GATEWAY_API_KEYS pairs it with an id
+// (`demo:local-development-key`), but Settings.resolve_key hashes only the
+// secret, so sending the pair 401s — measured against a live gateway.
+const DEMO_KEY = 'local-development-key'
 
 export function KeyPopover() {
   const { key, keyPopoverOpen: open } = useAppState()
@@ -77,7 +80,7 @@ export function KeyPopover() {
             <input
               type="password"
               aria-label="Gateway API key"
-              placeholder="key_id:secret"
+              placeholder="the secret, not id:secret"
               autoFocus
               className="w-full rounded border border-hairline-strong bg-raised px-2 py-1 font-mono text-xs text-ink"
               value={draft}
