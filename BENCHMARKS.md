@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured 2026-08-06 against endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-72e537d-slim`, GPU RTX PRO 6000 MIG 48GB (requested: NVIDIA L40S; platform substituted within the 48GB tier), model per response `model_version`. Rate $1.75/hr (2026-08-05, re-verify before quoting). Raw data: `benchmarks/raw.jsonl` (156 records). Methodology: fixed seed, one variable at a time, N stated per cell.
+Measured 2026-08-10 against endpoint `<endpoint-id: supplied in the submission email>`, image `0.1.0-50c27c4-slim`, GPU RTX PRO 6000 MIG 48GB (requested: NVIDIA L40S; platform substituted within the 48GB tier), model per response `model_version`. Rate $1.75/hr (2026-08-05, re-verify before quoting). Raw data: `benchmarks/raw.jsonl` (168 records). Methodology: fixed seed, one variable at a time, N stated per cell.
 
 **Read the N column before any percentile.** N is 3-10 per cell: sequential probes, no sustained load. Enough to rank options (step count, GPU tier, image format); not literal latency guarantees. SLO-grade p50/p95 needs a proper load test (e.g. Locust) at production concurrency, which this harness does not do.
 
@@ -84,7 +84,12 @@ Burst of 6 against workersMax=3: queue wait p50 27.1s, max 50.6s. Execution time
 
 Same methodology, same cell: fixed seed 42, same prompt, 1024×1024, 28 steps, guidance 3.5 pinned on both sides, N=5 sequential probes per target, one discarded warmup each. Public endpoint `black-forest-labs-flux-1-dev` billed at \$0.02/megapixel (2026-08-09), failed generations free; ours at \$1.75/hr × execution seconds.
 
-**Not yet measured — harness support landed, run pending.** `--only public` takes the probes; the next full run renders this table.
+| Target | N | exec p50 | wall p50 | wall p95 | \$/image p50 |
+|---|---|---|---|---|---|
+| public-flux-dev | 5 | 23.5s | 24.2s | 31.7s | \$0.0120 |
+| worker | 5 | 21.4s | 23.4s | 25.1s | \$0.0104 |
+
+The public column uses the response's own `cost` field: \$0.0120 per image, flat across all 5 probes, against the \$0.0210 the \$0.02/MP list rate implies at 1024×1024. Billed beats listed here; the list rate is a ceiling, not the invoice.
 
 | Differs | Ours | Public endpoint |
 |---|---|---|

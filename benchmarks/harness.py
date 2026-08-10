@@ -258,7 +258,7 @@ class FakePublicApi(Api):
             "executionTime": int(900 + steps * 120 * (width * height / 1024**2)),
             "workerId": "fake-public-worker",
             "output": {
-                "image_url": f"https://image.runpod.ai/fake/{job_id}.jpeg",
+                "result": f"https://image.runpod.ai/fake/{job_id}.jpeg",
                 "cost": width * height / 1e6 * 0.02,
             },
         }
@@ -599,7 +599,9 @@ def section_public(api: Api, cfg: dict[str, Any], done: set[str]) -> None:
             )
             record, output = run_case(target_api, key, payload, meta)
             if target == PUBLIC_TARGET:
-                record["image_url"] = output.get("image_url")
+                # Live responses put the URL in `result`; the docs said
+                # `image_url`. Both accepted so either shape records.
+                record["image_url"] = output.get("image_url") or output.get("result")
                 cost = public_cost_usd(
                     output, pub["width"], pub["height"], pub["rate_usd_per_mp"]
                 )
@@ -857,6 +859,17 @@ def _public_comparison_section(
                 f"{wall['p50']:.1f}s | {wall['p95']:.1f}s | "
                 f"\\${_p50(target_rows, 'cost_usd'):.4f} |"
             )
+        billed = _p50(rows.get(PUBLIC_TARGET, []), "cost_usd")
+        listed = pub["width"] * pub["height"] / 1e6 * pub["rate_usd_per_mp"]
+        if billed and abs(billed - listed) > 0.0001:  # noqa: PLR2004
+            lines += [
+                "",
+                f"The public column uses the response's own `cost` field: "
+                f"\\${billed:.4f} per image, flat across all {pub['n']} probes, "
+                f"against the \\${listed:.4f} the \\${pub['rate_usd_per_mp']:.2f}/MP "
+                f"list rate implies at {pub['width']}×{pub['height']}. Billed beats "
+                "listed here; the list rate is a ceiling, not the invoice.",
+            ]
     else:
         lines += [
             "**Not yet measured — harness support landed, run pending.** "
