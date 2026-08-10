@@ -73,6 +73,9 @@ def _request(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Cloudflare fronts api.runpod.io and answers the default
+            # `Python-urllib/x.y` agent with 403 error 1010.
+            "User-Agent": "flux-stack-deploy/1.0",
         },
         method=method,
     )

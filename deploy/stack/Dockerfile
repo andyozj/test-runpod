@@ -7,7 +7,9 @@
 #   make build-stack
 
 # --- Stage 1: frontend build -------------------------------------------------
-FROM node:22-slim AS frontend
+# Pinned to the build host's architecture: the output is platform-independent
+# JS, and running tsc/vite under qemu emulation segfaults (exit 139).
+FROM --platform=$BUILDPLATFORM node:22-slim AS frontend
 
 WORKDIR /frontend
 COPY frontend/ ./
