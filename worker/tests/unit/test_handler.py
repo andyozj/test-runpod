@@ -95,7 +95,9 @@ def test_progress_callback_fires_once_per_step(
 
     from worker.inference import generate
 
-    generate(request, pipeline, settings, on_progress=lambda s, t: seen.append((s, t)))
+    generate(
+        request, pipeline, settings, on_progress=lambda s, t, _l: seen.append((s, t))
+    )
 
     assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]
 

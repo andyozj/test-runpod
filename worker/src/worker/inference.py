@@ -23,7 +23,9 @@ MAX_SEED = 2**31 - 1
 T5_MAX_SEQUENCE_LENGTH = 512
 JPEG_QUALITY = 95
 
-ProgressCallback = Callable[[int, int], None]
+# Any: the third argument is the pipeline's packed latent tensor, torch-typed
+# only inside the image; the dev environment has no torch to name it with.
+ProgressCallback = Callable[[int, int, Any], None]
 
 
 def encode_image(image: Image.Image, image_format: str) -> bytes:
@@ -62,8 +64,9 @@ def generate(
         pipeline: An initialised pipeline, already resident on the GPU.
         settings: Runtime configuration, used for `model_version`.
         on_progress: Called after each denoising step with the completed step
-            number and the total. Must stay trivial — it runs on the GPU thread
-            between steps, so the cost is paid once per step.
+            number, the total, and the packed latents (None when the pipeline
+            reports none). Must stay cheap — it runs on the GPU thread between
+            steps, so the cost is paid once per step.
 
     Returns:
         The rendered image with the effective seed, dimensions and timings.
@@ -143,7 +146,10 @@ def _step_callback(
     """Adapt our progress callback to the diffusers callback signature.
 
     Args:
-        on_progress: The callback to invoke with (completed_step, total).
+        on_progress: The callback to invoke with (completed_step, total,
+            packed_latents). Latents come from `callback_kwargs`, which
+            carries them under the pipeline's default
+            `callback_on_step_end_tensor_inputs = ["latents"]`.
         total: Total number of steps.
 
     Returns:
@@ -153,7 +159,7 @@ def _step_callback(
     def _callback(
         _pipe: Any, step: int, _timestep: int, kwargs: dict[str, Any]
     ) -> dict[str, Any]:
-        on_progress(step + 1, total)
+        on_progress(step + 1, total, kwargs.get("latents"))
         return kwargs
 
     return _callback

@@ -2214,6 +2214,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
+    { name = "numpy" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -2244,6 +2245,7 @@ requires-dist = [
     { name = "accelerate", marker = "extra == 'gpu'", specifier = ">=0.34" },
     { name = "diffusers", marker = "extra == 'gpu'", specifier = ">=0.31" },
     { name = "huggingface-hub", specifier = ">=0.25" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=10.4" },
     { name = "protobuf", marker = "extra == 'gpu'", specifier = ">=5.28" },
     { name = "pydantic", specifier = ">=2.9" },

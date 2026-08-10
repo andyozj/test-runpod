@@ -24,6 +24,8 @@ class Settings(BaseSettings):
         model_cache_root: HuggingFace cache hub directory, where RunPod
             pre-stages a cached model. Used only when `weights_path` is absent,
             so one build serves every delivery mechanism.
+        preview_enabled: Attach a latent-preview JPEG to each throttled
+            progress update. `PREVIEW_ENABLED=false` disables it.
     """
 
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
@@ -32,6 +34,7 @@ class Settings(BaseSettings):
     model_revision: str = Field(default="unknown", min_length=1)
     weights_path: Path = Path("/opt/weights")
     model_cache_root: Path = Path("/runpod-volume/huggingface-cache/hub")
+    preview_enabled: bool = True
 
     @property
     def model_version(self) -> str:

@@ -24,6 +24,7 @@ src/worker/
                   contracts/blocklist.json and contracts/normalisation.json
   pipeline.py     injectable FluxPipeline accessor; tests never import torch
   inference.py    the generation call, timings, OOM handling
+  preview.py      latent→RGB preview frames for progress updates (numpy, no torch)
   weights.py      resolve staged weights, discover the loaded revision
   errors.py       structured error envelope, codes from contracts/error-codes.json
   contracts.py    locate the repo-root contracts/ directory
@@ -44,7 +45,7 @@ Per job:
 1. **Validate** (`schemas.py`). `job["input"]` → `GenerationRequest`, bounds per the [input table](../README.md#input), `extra="forbid"`. Width and height snap **down** to ×16; the snapped values run and are reported. Failure returns `INVALID_*` before any other work.
 2. **Prompt guardrail**, before any GPU time. Match → `PROMPT_BLOCKED`. A guardrail that *raises* → `INFERENCE_FAILED`: still fail-closed, but retryable, since a classifier crash is not a verdict on the prompt.
 3. **Seed.** The request's, else `secrets.randbelow(2**31 - 1)`; seeds a CUDA `torch.Generator`.
-4. **Infer** (`inference.py`). One pipeline call, `max_sequence_length=512`. Progress goes to `runpod.serverless.progress_update` at 10-point strides plus the final step, ~10 calls per job: each SDK call is a thread, an event loop and a TLS session. OOM → `OOM`; any other exception → `INFERENCE_FAILED`, detail logged, not returned.
+4. **Infer** (`inference.py`). One pipeline call, `max_sequence_length=512`. Progress goes to `runpod.serverless.progress_update` at 10-point strides plus the final step, ~10 calls per job: each SDK call is a thread, an event loop and a TLS session. Each reported stride also carries a latent preview (`preview.py`): the packed callback latents unpacked to spatial form, projected latent→RGB with ComfyUI's fixed FLUX matrix, JPEG-encoded at ≤192px / quality 60 (≤12kB measured on noise latents, M-series CPU, 2026-08-09) as `preview_b64` + `preview_format: "jpeg"`. `PREVIEW_ENABLED=false` turns it off; a preview crash degrades to the preview-less update and never fails the job. OOM → `OOM`; any other exception → `INFERENCE_FAILED`, detail logged, not returned.
 5. **Image guardrail** on the decoded bytes. Match → `IMAGE_BLOCKED`, crash → `INFERENCE_FAILED`. Default binding is `NoopImageGuardrail`.
 6. **Encode.** PNG, or JPEG at quality 95 after `convert("RGB")`, then base64.
 7. **Respond.** `image_base64`, `format`, echoed `seed`, effective dimensions, steps, guidance, `model_version` (`{model_id}@{revision}`, discovered at startup), `timings` (`inference_s`, `encode_s`).

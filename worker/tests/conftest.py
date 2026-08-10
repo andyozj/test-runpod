@@ -24,11 +24,17 @@ class FakeImages:
 
 @dataclass
 class FakePipeline:
-    """Records every call and returns a solid-colour image."""
+    """Records every call and returns a solid-colour image.
+
+    `latents` mimics diffusers handing the packed latent tensor to the step
+    callback via `callback_kwargs`; None reproduces a pipeline reporting no
+    tensor inputs.
+    """
 
     calls: list[dict[str, Any]] = field(default_factory=list)
     raises: Exception | None = None
     colour: str = "red"
+    latents: Any = None
 
     def __call__(self, **kwargs: Any) -> FakeImages:
         self.calls.append(kwargs)
@@ -36,8 +42,9 @@ class FakePipeline:
             raise self.raises
         callback = kwargs.get("callback_on_step_end")
         if callback is not None:
+            callback_kwargs = {} if self.latents is None else {"latents": self.latents}
             for step in range(kwargs["num_inference_steps"]):
-                callback(self, step, 0, {})
+                callback(self, step, 0, callback_kwargs)
         size = (kwargs["width"], kwargs["height"])
         return FakeImages(images=[Image.new("RGB", size, self.colour)])
 

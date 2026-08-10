@@ -12,6 +12,7 @@ from typing import Any
 import structlog
 from pydantic import ValidationError
 
+from worker import preview
 from worker.errors import ErrorCode, GuardrailBlockedError, InferenceError, WorkerError
 from worker.guardrails import (
     BlocklistPromptGuardrail,
@@ -226,11 +227,12 @@ def _run(
         The generation result.
     """
     log.info("generation_started", steps=request.num_inference_steps)
+    effective_settings = settings if settings is not None else get_settings()
     return generate(
         request,
         pipeline if pipeline is not None else get_pipeline(),
-        settings if settings is not None else get_settings(),
-        on_progress=_progress_reporter(job),
+        effective_settings,
+        on_progress=_progress_reporter(job, request, effective_settings),
     )
 
 
@@ -257,18 +259,29 @@ def should_report_progress(step: int, total: int, last_percent: int) -> bool:
     return step == total or percent >= last_percent + PROGRESS_STRIDE_PCT
 
 
-def _progress_reporter(job: dict[str, Any]) -> ProgressCallback | None:
+def _progress_reporter(
+    job: dict[str, Any], request: GenerationRequest, settings: Settings
+) -> ProgressCallback | None:
     """Build a throttled progress callback writing into the RunPod job record.
 
     Progress is not logged: it is already visible on the job, and 28 log lines
     per image describe something nobody reads twice.
 
+    Each reported stride additionally carries a latent-preview JPEG
+    (`preview_b64` + `preview_format`) when `settings.preview_enabled` and the
+    pipeline handed the callback its latents. Preview generation fails open: a
+    crash there degrades to the preview-less update and is logged once at
+    debug, never surfaced to the job.
+
     Args:
         job: The RunPod job envelope.
+        request: The validated request; its effective dimensions drive the
+            latent unpack.
+        settings: Runtime configuration, read for `preview_enabled`.
 
     Returns:
-        A callable taking the completed step and the total, or None when the
-        RunPod SDK is unavailable.
+        A callable taking the completed step, the total and the packed
+        latents, or None when the RunPod SDK is unavailable.
     """
     if not job.get("id"):
         return None
@@ -278,15 +291,36 @@ def _progress_reporter(job: dict[str, Any]) -> ProgressCallback | None:
         return None
 
     last = {"percent": -PROGRESS_STRIDE_PCT}
+    preview_logged = {"done": False}
 
-    def _report(step: int, total: int) -> None:
+    def _render_preview(latents: Any) -> str | None:
+        # Any: the pipeline's latent tensor; torch exists only in the image.
+        if latents is None or not settings.preview_enabled:
+            return None
+        try:
+            return preview.render_preview(
+                latents, request.effective_height, request.effective_width
+            )
+        except Exception as exc:  # noqa: BLE001 - preview must never fail the job
+            if not preview_logged["done"]:
+                logger.debug(
+                    "preview_failed", error=str(exc), error_type=type(exc).__name__
+                )
+                preview_logged["done"] = True
+            return None
+
+    def _report(step: int, total: int, latents: Any) -> None:
+        # Any: same latent tensor as above, forwarded from the step callback.
         if not should_report_progress(step, total, last["percent"]):
             return
         percent = round(100 * step / total)
         last["percent"] = percent
-        runpod.serverless.progress_update(
-            job, {"step": step, "total": total, "percent": percent}
-        )
+        payload: dict[str, Any] = {"step": step, "total": total, "percent": percent}
+        frame = _render_preview(latents)
+        if frame is not None:
+            payload["preview_b64"] = frame
+            payload["preview_format"] = preview.PREVIEW_FORMAT
+        runpod.serverless.progress_update(job, payload)
 
     return _report
 
